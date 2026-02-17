@@ -1,8 +1,3 @@
-# Core dependencies — pinned loosely so they don't explode on every ComfyUI update
-torch>=2.1.0
-transformers>=4.42.0          # NeuralDaredevil & Llama-3.2 were released around there
-huggingface_hub>=0.23.0       # for snapshot_download fallback
-
-# Optional but strongly recommended (quality of life)
-accelerate>=0.33.0            # better device_map & memory handling
-bitsandbytes>=0.43.3          # if someone wants 4-bit / 8-bit quant (very common for 8B)
+torch
+transformers
+huggingface_hub

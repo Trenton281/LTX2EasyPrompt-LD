@@ -62,10 +62,10 @@ class LTX2VisionDescribe:
     FUNCTION      = "describe"
     CATEGORY      = "LTX2"
 
-    def describe(self, image, model, offline_mode, local_path):
+    def describe(self, image, model_name, offline_mode, local_path):
         global _INSTANCE
 
-        hf_id = MODEL_OPTIONS[model]
+        hf_id = MODEL_OPTIONS[model_name]
 
         # ── Offline env ───────────────────────────────────────────────────────
         if offline_mode:
@@ -103,7 +103,7 @@ class LTX2VisionDescribe:
                     torch.cuda.empty_cache()
 
             dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-            print(f"[VisionDescribe] Loading Qwen2.5-VL-3B...")
+            print(f"[VisionDescribe] Loading {model_name}...")
 
             _INSTANCE["processor"] = AutoProcessor.from_pretrained(
                 source, local_files_only=offline_mode

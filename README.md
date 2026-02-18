@@ -13,10 +13,13 @@ IT CAN READ IMAGES TOO - For Image to video workflows
 
 🎯 Negative prompt output pin
 Automatic scene-aware negative prompt, no second LLM call. Detects indoor/outdoor, day/night, explicit content, shot type and adds the right negatives for each. Wire it straight to your negative encoder and forget about it.
+
 🏷️ LoRA trigger word input
 Paste your trigger words once. They get injected at the very start of every prompt, every single run. Never buried halfway through the text, never accidentally dropped.
+
 💬 Dialogue toggle
 On — the LLM invents natural spoken dialogue woven into the scene as inline prose with attribution and delivery cues, like a novel. Off — it uses only the quoted dialogue you provide, or generates silently. No more floating unattributed quotes ruining your audio sync.
+
 ⚡ Bypass / direct mode
 Flip the toggle and your text goes straight to the positive encoder with zero LLM processing. Full manual control when you want it, one click to switch back. Zero VRAM cost in bypass mode.
 

@@ -438,11 +438,25 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             {"role": "user",   "content": user_input.strip() + dialogue_instruction + explicit_instruction + length_instruction},
         ]
 
-        input_ids = self.tokenizer.apply_chat_template(
+        # ── apply_chat_template compatibility fix ────────────────────────────
+        # Older transformers versions return a plain tensor; newer versions (4.43+)
+        # may return a BatchEncoding dict depending on the tokenizer/template.
+        # We normalise both cases into a plain LongTensor before calling .shape.
+        raw = self.tokenizer.apply_chat_template(
             messages,
             return_tensors="pt",
             add_generation_prompt=True,
-        ).to(self.model.device)
+        )
+
+        # BatchEncoding / dict-like: extract the input_ids tensor
+        if hasattr(raw, "input_ids"):
+            input_ids = raw.input_ids.to(self.model.device)
+        elif isinstance(raw, dict):
+            input_ids = raw["input_ids"].to(self.model.device)
+        else:
+            # Already a plain tensor — original behaviour
+            input_ids = raw.to(self.model.device)
+        # ────────────────────────────────────────────────────────────────────
 
         input_length = input_ids.shape[1]
 

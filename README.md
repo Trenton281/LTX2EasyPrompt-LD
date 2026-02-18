@@ -2,7 +2,52 @@
 
 
 
-<img width="359" height="353" alt="image" src="https://github.com/user-attachments/assets/f19e6495-7a5c-479a-952b-6d13e9b42ed2" />
+<img width="244" height="326" alt="image" src="https://github.com/user-attachments/assets/43f5cda0-c13a-491f-a13b-586e1cc51c55" />
+
+
+<img width="560" height="406" alt="image" src="https://github.com/user-attachments/assets/872cbf72-398d-4727-bb58-b12de93bbec2" />
+
+New features in this release
+
+IT CAN READ IMAGES TOO - For Image to video workflows
+
+🎯 Negative prompt output pin
+Automatic scene-aware negative prompt, no second LLM call. Detects indoor/outdoor, day/night, explicit content, shot type and adds the right negatives for each. Wire it straight to your negative encoder and forget about it.
+🏷️ LoRA trigger word input
+Paste your trigger words once. They get injected at the very start of every prompt, every single run. Never buried halfway through the text, never accidentally dropped.
+💬 Dialogue toggle
+On — the LLM invents natural spoken dialogue woven into the scene as inline prose with attribution and delivery cues, like a novel. Off — it uses only the quoted dialogue you provide, or generates silently. No more floating unattributed quotes ruining your audio sync.
+⚡ Bypass / direct mode
+Flip the toggle and your text goes straight to the positive encoder with zero LLM processing. Full manual control when you want it, one click to switch back. Zero VRAM cost in bypass mode.
+
+
+
+How it works
+Step 1 — Vision node analyses your starting frame
+Drop in any image and the vision node (Qwen2.5-VL-3B, + Qwen2.5 7b runs fully locally) writes a scene context describing:
+
+Visual style — photorealistic, anime, 3D animation, cartoon etc
+Subject — age, gender, skin tone, hair, body type
+Clothing, or nudity described directly if present
+Exact pose and body position
+What they're on or interacting with
+Shot type — close-up, medium shot, wide shot etc
+Camera angle — eye level, low angle, high angle
+Lighting — indoor/outdoor, time of day, light quality
+Background and setting
+
+It unloads from VRAM immediately after so LTX-2 has its full budget back.
+Step 2 — Prompt node uses that as ground truth
+Wire the vision output into the Easy Prompt node and your scene context becomes the authoritative starting point. The LLM doesn't invent the subject or guess the lighting — it takes exactly what the vision node described and animates it forward from your direction.
+You just tell it what should happen next:
+
+"she slowly turns to face the camera and smiles"
+
+And it writes a full cinematic prompt that matches your actual image — correct lighting, correct shot framing, correct subject — and flows naturally from there.
+
+
+
+
 
 
 

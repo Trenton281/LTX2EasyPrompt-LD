@@ -20,11 +20,63 @@ import gc
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
+# ── Negative prompt builder ───────────────────────────────────────────────────
+# Builds a scene-aware negative prompt without a second LLM call.
+# Base quality terms are always included; scene-specific terms are added
+# by scanning the generated prompt for relevant content.
+
+_NEG_BASE = (
+    "blurry, out of focus, low quality, worst quality, jpeg artifacts, "
+    "static, no motion, frozen, duplicate, watermark, text, signature, "
+    "poorly drawn, bad anatomy, deformed, disfigured, extra limbs, "
+    "missing limbs, floating limbs, disconnected body parts, "
+    "overexposed, underexposed, grainy, noise"
+)
+
+_NEG_INDOOR   = "harsh outdoor lighting, direct sunlight"
+_NEG_OUTDOOR  = "studio background, indoor lighting"
+_NEG_EXPLICIT = "censored, mosaic, pixelated, black bar, blurred genitals"
+_NEG_PORTRAIT = "wide angle distortion, fish eye, full body shot"
+_NEG_WIDE     = "close-up, portrait crop, tight frame"
+_NEG_NIGHT    = "overexposed, bright daylight, blown highlights"
+_NEG_DAY      = "underexposed, dark shadows, black crush"
+_NEG_MULTI    = "merged bodies, fused figures, incorrect number of people"
+
+def _build_negative_prompt(result: str, user_input: str) -> str:
+    combined = (result + " " + user_input).lower()
+    extras = []
+
+    if any(w in combined for w in ["indoor", "room", "interior", "bedroom", "kitchen", "office"]):
+        extras.append(_NEG_OUTDOOR)
+    elif any(w in combined for w in ["outdoor", "street", "beach", "forest", "park", "exterior"]):
+        extras.append(_NEG_INDOOR)
+
+    if any(w in combined for w in ["pussy", "cock", "penis", "vagina", "nude", "naked", "explicit", "nipple", "breast"]):
+        extras.append(_NEG_EXPLICIT)
+
+    if any(w in combined for w in ["close-up", "close up", "portrait", "face shot", "headshot"]):
+        extras.append(_NEG_PORTRAIT)
+    elif any(w in combined for w in ["wide shot", "wide angle", "aerial", "bird's-eye", "establishing"]):
+        extras.append(_NEG_WIDE)
+
+    if any(w in combined for w in ["night", "dark", "moonlight", "dimly lit", "candlelight"]):
+        extras.append(_NEG_NIGHT)
+    elif any(w in combined for w in ["daylight", "sunny", "golden hour", "bright", "midday"]):
+        extras.append(_NEG_DAY)
+
+    if any(w in combined for w in ["two women", "two men", "two people", "both", "together", "couple", "they "]):
+        extras.append(_NEG_MULTI)
+
+    parts = [_NEG_BASE] + extras
+    return ", ".join(parts)
+
+
 class LTX2PromptArchitect:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
+                "bypass": ("BOOLEAN", {"default": False}),
                 "user_input": ("STRING", {
                     "multiline": True,
                     "default": "a woman walks through a rain-soaked city street at night"
@@ -47,6 +99,7 @@ class LTX2PromptArchitect:
                     "step": 1,
                     "display": "number"
                 }),
+                "invent_dialogue": ("BOOLEAN", {"default": True}),
                 "keep_model_loaded": ("BOOLEAN", {"default": True}),
                 "offline_mode": ("BOOLEAN", {"default": True}),
                 "frame_count": ("INT", {
@@ -75,10 +128,22 @@ class LTX2PromptArchitect:
                     "placeholder": "Local path to Llama-3.2 3B snapshot folder"
                 }),
             },
+            "optional": {
+                "scene_context": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "placeholder": "Optional: vision description from LTX-2 Vision Describe node",
+                }),
+                "lora_triggers": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "placeholder": "Optional: LoRA trigger words e.g. 'ohwx woman, film grain'",
+                }),
+            },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "INT")
-    RETURN_NAMES = ("PROMPT", "PREVIEW", "FRAMES")
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("PROMPT", "PREVIEW", "NEG_PROMPT")
     FUNCTION = "generate"
     CATEGORY = "LTX2"
 
@@ -88,8 +153,6 @@ class LTX2PromptArchitect:
         "8B - NeuralDaredevil (High Quality)": "mlabonne/NeuralDaredevil-8B-abliterated",
         "3B - Llama-3.2 Abliterated (Low VRAM)": "huihui-ai/Llama-3.2-3B-Instruct-abliterated",
     }
-    # Legacy single-model constant kept for reference
-    MODEL_ID = "mlabonne/NeuralDaredevil-8B-abliterated"
 
     # ── Hardcoded system prompt ───────────────────────────────────────────────
     # Not exposed in the UI — edit here in code if you need to adjust behaviour.
@@ -102,9 +165,24 @@ PRIORITY ORDER — always establish these first, in this order:
 4. Scene & environment (location, time of day, lighting, colour palette, textures, atmosphere)
 
 THEN add:
-5. Action & motion — describe the movement as a continuous present-tense sequence, start to finish. If the subject begins clothed and the scene is sexual or explicit, describe the full undressing sequence explicitly — what garment comes off first, how it is removed, what is revealed, in what order — before describing any explicit acts. Do not skip from clothed to nude without showing the transition.
+5. Action & motion — describe the movement as a continuous present-tense sequence, start to finish. Structure the action in clear beats.
+
+UNDRESSING RULE — this is mandatory when clothing removal is implied or stated:
+If the subject is clothed at the start and the scene involves nudity, stripping, or explicit content, you MUST dedicate a full narrative segment to the undressing BEFORE any nudity or explicit act is described. This segment must:
+  - Name each garment explicitly (shirt, bra, jeans, underwear, shoes, etc.)
+  - Describe HOW it is removed — fingers on buttons, zipper pulled down, fabric sliding off shoulders, stepped out of, peeled away
+  - Describe what is physically REVEALED at each step — the collarbone, the stomach, the curve of the hip, the chest, the bare legs
+  - Follow the exact order the clothes come off — do not skip or compress steps
+  - Use camera-aware language — the camera lingers, cuts to, tilts down to reveal, holds on
+  - Do NOT jump from clothed to naked. The transition IS the content. Treat it as its own scene segment with the same density as any other beat.
+
 6. Camera movement — specify direction, speed, and what the camera reveals or follows; describe what is visible before and after the move
-7. Audio — ALWAYS include audio AND dialogue. Maximum 2 ambient sounds. Invent dialogue that naturally fits the scene, character, and mood — do not leave it silent unless the user's input explicitly says "no dialogue" or "silent". Format: [AMBIENT: sound 1, sound 2] [DIALOGUE: "spoken words" — language, accent]. Dialogue must feel like it belongs in the scene: a whisper, a command, a confession, a reaction, or explicit vocalisation if the scene demands it. Write it directly and specifically — never imply, soften, or cut away.
+7. Audio — Always include ambient sound. Maximum 2 ambient sounds. Format: [AMBIENT: sound 1, sound 2]
+   Dialogue — follow the DIALOGUE INSTRUCTION you are given exactly. When dialogue is included, write it as inline prose woven into the action — not as a labelled tag. The spoken words sit inside the sentence, attributed with delivery and physical action, exactly like a novel. Examples of correct format:
+   'He leans back, satisfied, "I think I'll have to go back tomorrow for more," he chuckles, his eyes crinkling at the corners.'
+   '"Don\'t stop," she breathes, gripping the sheets, her voice barely above a whisper.'
+   'She turns to face him, "I\'ve been waiting all day for this," her tone quiet and certain.'
+   NEVER use [DIALOGUE: ...] tags. NEVER write dialogue as a separate bracketed block. Dialogue flows inside the prose as part of the action.
 
 WRITING RULES:
 - Use present tense throughout
@@ -115,7 +193,7 @@ WRITING RULES:
 - Aim for 8–12 sentences of dense, flowing prose — not a bullet list
 - Write in sections separated by a single line break for clean model parsing
 
-IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary, labels, or any explanation. Do NOT write "Sure!", "Here's your prompt:", or anything like that. Begin immediately with the video style or shot description."""
+IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary, labels, or any explanation. Do NOT write "Sure!", "Here's your prompt:", or anything like that. Do NOT add a checklist, compliance summary, note, or confirmation of instructions at the end — not in brackets, not as a "Note:", not in any form. The output ends when the scene ends. Nothing after the last sentence of the scene. Begin immediately with the video style or shot description."""
 
     _PREAMBLE_RE = re.compile(
         r"^(Sure!?|Certainly!?|Absolutely!?|Of course!?|Here(?:'s| is).*?:|Great!?)[^\n]*\n?",
@@ -233,14 +311,15 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
     @staticmethod
     def _clean_output(text: str) -> str:
         """
-        Strip common LLM preamble and role-token bleed.
+        Strip common LLM preamble, role-token bleed, and compliance checklists.
 
         NeuralDaredevil uses plain-text role labels (e.g. 'assistant') rather
         than dedicated special tokens, so skip_special_tokens=True doesn't catch
-        them. We handle three cases:
+        them. We handle four cases:
           1. Preamble at the start  ("Sure!", "Here's your prompt:", etc.)
           2. Role word at the end   ("...and water.assistant")
           3. Role word mid-text     (multiple generations concatenated with role labels)
+          4. Compliance checklist   ("(Exactly 4 actions...)(Pacing strict)..." etc.)
         """
         text = text.strip()
 
@@ -258,6 +337,28 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             text,
             flags=re.IGNORECASE,
         )
+
+        # 4. Strip trailing compliance content — model sometimes appends:
+        #    - A "Note:" explanation block after the scene ends
+        #    - A single parenthesised summary line: "(5 distinct actions within 20 seconds)"
+        #    - Consecutive bracketed phrases: "(Exactly 4 actions)(Pacing strict)..."
+        #    Order matters: strip Note: first so it doesn't shield bracket lines above it.
+        text = re.sub(
+            r"\s*\n+Note:.*$",               # trailing Note: block (must go first)
+            "",
+            text,
+            flags=re.DOTALL,
+        ).strip()
+        text = re.sub(
+            r"(\s*\([^)]{5,}\)){2,}\s*$",   # consecutive bracketed phrases
+            "",
+            text,
+        ).strip()
+        text = re.sub(
+            r"\s*\(\d+[^)]{3,}\)\s*$",       # single parenthesised count/summary line
+            "",
+            text,
+        ).strip()
 
         return text.strip()
 
@@ -310,7 +411,13 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         print(f"[LTX2] Stop token IDs: {unique}")
         return unique
 
-    def generate(self, user_input, max_tokens, creativity, seed, keep_model_loaded, offline_mode, frame_count, model, local_path_8b, local_path_3b):
+    def generate(self, bypass, user_input, max_tokens, creativity, seed, invent_dialogue, keep_model_loaded, offline_mode, frame_count, model, local_path_8b, local_path_3b, scene_context="", lora_triggers=""):
+        # ── Bypass mode — no model loaded, input passed straight through ────────
+        if bypass:
+            print("[LTX2] Bypass ON — skipping model, passing user_input directly.")
+            neg_prompt = _build_negative_prompt("", user_input)
+            return (user_input.strip(), user_input.strip(), neg_prompt)
+
         # Resolve which local path to use based on selected model
         path_map = {
             "8B - NeuralDaredevil (High Quality)": local_path_8b,
@@ -319,25 +426,29 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         local_path = path_map.get(model, "")
         self.load_model(model_key=model, offline_mode=offline_mode, local_path=local_path)
 
-        # --- Timing ---
-        # Real duration passed to LTX-2 via the FRAMES output pin — untouched.
-        # LLM gets a 40% shorter duration so its pacing fills the clip correctly
-        # without over-writing. Neither the real nor adjusted duration is ever
-        # mentioned in the final prompt output — only used as an internal shaping hint.
-        real_seconds     = frame_count / 24.0
-        llm_seconds      = real_seconds * 0.5   # 50% — half the real duration, never shown in output
-        llm_seconds_int  = max(1, round(llm_seconds))
+        # --- Timing & pacing ---
+        # Convert frames to real seconds, then calculate a hard action count cap.
+        # One visible screen action takes roughly 4 seconds to read as distinct.
+        # We clamp between 1 and 10 to stay sane at extremes.
+        real_seconds = frame_count / 24.0
+        action_count = max(1, min(10, round(real_seconds / 4)))
 
-        # Pacing descriptor fed silently into the length instruction
-        # so the LLM shapes action density correctly for the clip length
-        if llm_seconds_int <= 3:
-            pacing_hint = "one tight, single-moment action — no time for scene changes"
-        elif llm_seconds_int <= 7:
-            pacing_hint = "a brief scene with one clear movement arc, no more than two beats"
-        elif llm_seconds_int <= 15:
-            pacing_hint = "a short scene with a clear beginning, middle and end"
+        # Build a concrete, number-based pacing instruction the LLM cannot fudge.
+        # Vague descriptors like "short scene" get ignored — explicit counts don't.
+        if action_count == 1:
+            pacing_hint = (
+                f"This clip is {real_seconds:.0f} seconds long. "
+                f"Write EXACTLY 1 action. One single moment. "
+                f"Do not describe anything before or after it. No setup, no resolution."
+            )
         else:
-            pacing_hint = "a full scene with distinct phases: establish, develop, resolve"
+            pacing_hint = (
+                f"This clip is {real_seconds:.0f} seconds long. "
+                f"Write EXACTLY {action_count} distinct actions — no more. "
+                f"Each action should take roughly {real_seconds / action_count:.0f} seconds of screen time. "
+                f"Do not add setup, backstory, or resolution beyond these {action_count} actions. "
+                f"Stop when the {action_count}{'st' if action_count == 1 else 'nd' if action_count == 2 else 'rd' if action_count == 3 else 'th'} action is complete."
+            )
 
         # --- Seed ---
         if seed != -1:
@@ -347,13 +458,16 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
 
         # --- Token budget ---
         token_val = int(max_tokens.split(" - ")[0])
-        # Scale the minimum proportionally to the selected budget so the model
-        # actually fills the space the user asked for.
-        # 256  → min ~180  (70%)
-        # 512  → min ~370  (72%)
-        # 800  → min ~580  (72%)
-        # 1024 → min ~740  (72%)
-        min_tokens = int(token_val * 0.72)
+        # Generate up to 1.3× the requested count so the model has headroom to
+        # finish its last sentence without getting cut off mid-word.
+        # min is set to 50% so the model can wrap up naturally whenever ready
+        # rather than being forced to keep writing until it hits the ceiling.
+        # 256  → max_actual 332,  min ~128
+        # 512  → max_actual 665,  min ~256
+        # 800  → max_actual 1040, min ~400
+        # 1024 → max_actual 1331, min ~512
+        max_tokens_actual = int(token_val * 1.3)
+        min_tokens = int(token_val * 0.50)
 
         # --- Temperature ---
         temp_map = {
@@ -380,6 +494,14 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         )
         is_explicit = bool(_explicit_re.search(user_input))
 
+        # Detect clothing removal intent even in non-explicit prompts
+        _undress_re = re.compile(
+            r"\b(undress\w*|strip\w*|takes?\s+off|removes?\s+(her|his|their|the)?\s*\w*\s*(shirt|dress|top|bra|pants|jeans|clothes|clothing|outfit|underwear|skirt|jacket|coat|robe)|"
+            r"disrobe\w*|unbutton\w*|unzip\w*|peels?\s+off|pulls?\s+off|shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress))\b",
+            re.IGNORECASE,
+        )
+        has_undressing = bool(_undress_re.search(user_input))
+
         if is_explicit:
             explicit_instruction = (
                 "\n[INSTRUCTION: This is an explicit adult scene. "
@@ -387,76 +509,151 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
                 "These are REQUIRED words, not optional. Do not replace them with 'sex', 'crevice', 'core', "
                 "'womanhood', 'manhood', or any other euphemism or metaphor. "
                 "If the user said 'pussy', write 'pussy' every time. "
-                "If the subject starts clothed, describe the undressing in full explicit sequence — "
-                "which garment is removed first, how it comes off, what body part is revealed, then the next, "
-                "in order — before any explicit act is described. Do not jump from clothed to explicit. "
+                "UNDRESSING SEGMENT — MANDATORY: If the subject starts clothed, you MUST write a dedicated undressing segment "
+                "before ANY explicit act or nudity. This is not a brief mention — it is a full narrative beat. "
+                "Go garment by garment: name it, describe how it is removed (fingers, zipper, pulling over the head, stepping out of), "
+                "describe what body part is revealed and how it looks. Then the next garment. Then the next. "
+                "The camera must linger on each reveal. Do not compress. Do not summarise. Do not skip to naked. "
+                "The undressing IS the scene — write it with the same density and length as the explicit act that follows. "
                 "Always state the character's age as a specific number. "
                 "Describe body parts, positions, and physical actions with blunt, specific language. "
                 "Every anatomical detail must be stated plainly — no softening, no implying, no cutting away.]"
             )
         else:
-            explicit_instruction = (
-                "\n[INSTRUCTION: Always state the character's age as a specific number, "
-                "e.g. 'a 34-year-old man' — never omit or approximate it.]"
-            )
+            if has_undressing:
+                explicit_instruction = (
+                    "\n[INSTRUCTION: Always state the character's age as a specific number, "
+                    "e.g. 'a 34-year-old man' — never omit or approximate it. "
+                    "UNDRESSING SEGMENT — MANDATORY: The prompt involves clothing removal. "
+                    "You MUST write a dedicated undressing segment as its own narrative beat. "
+                    "Go garment by garment: name it, describe how it is removed, describe what is revealed. "
+                    "The camera lingers on each step. Do not skip or compress — the undressing is a full scene segment.]"
+                )
+            else:
+                explicit_instruction = (
+                    "\n[INSTRUCTION: Always state the character's age as a specific number, "
+                    "e.g. 'a 34-year-old man' — never omit or approximate it.]"
+                )
 
 
-        # Check if the user has explicitly opted out of dialogue.
-        # Recognised phrases: "no dialogue", "silent", "no talking", "dialogue: none", etc.
-        _no_dialogue_re = re.compile(
-            r"\b(no\s+dialogue|no\s+talking|no\s+speech|no\s+speaking|"
-            r"silent(\s+film)?|dialogue\s*:\s*none|mute)\b",
-            re.IGNORECASE,
+        # --- Sequence detection ---
+        # If the user wrote numbered steps (1. 2. 3. etc), detect them and inject
+        # an instruction to follow that exact order — no reordering, no skipping.
+        _sequence_re = re.compile(
+            r"^\s*(\d+[\.\):])\s+.+", re.MULTILINE
         )
-        user_wants_silence = bool(_no_dialogue_re.search(user_input))
-
-        if user_wants_silence:
-            dialogue_instruction = (
-                "\n\n[INSTRUCTION: The user has requested NO dialogue. "
-                "Use [DIALOGUE: none] and describe only ambient sound.]"
+        sequence_steps = _sequence_re.findall(user_input)
+        if len(sequence_steps) >= 2:
+            step_count = len(sequence_steps)
+            sequence_instruction = (
+                f"\n[SEQUENCE INSTRUCTION: The user has provided {step_count} numbered steps. "
+                f"You MUST follow them in exact order — step 1 first, then step 2, and so on. "
+                f"Do not reorder, skip, or merge steps. Each step is one distinct beat in the scene. "
+                f"Do not add actions before step 1 or after step {step_count}.]"
             )
         else:
-            dialogue_instruction = (
-                "\n\n[INSTRUCTION: Invent natural dialogue that fits this scene. "
-                "Do NOT write [DIALOGUE: none]. Write real spoken words. "
-                "If the scene is sexual or explicit, dialogue should reflect that naturally — "
-                "breathless, reactive, commanding, or intimate as the moment demands. "
-                "Do not soften, imply, or fade out. Write it directly.]"
-            )
+            sequence_instruction = ""
 
-        # Tell the model how long to write and how to pace — timing is hidden,
-        # only the action density/pacing shape is communicated.
-        length_instruction = (
-            f"\n[INSTRUCTION: Write approximately {token_val} tokens of output. "
-            f"Do not cut short — expand every section fully. "
-            f"Pace the action as: {pacing_hint}.]"
+        # --- Multi-subject detection ---
+        # If the input describes two or more people, inject a spatial instruction
+        # so the model tracks who is doing what and where they are relative to
+        # each other and the camera — otherwise it tends to lose track.
+        _multi_re = re.compile(
+            r"\b(two\s+(women|men|people|girls|guys|characters|figures)|"
+            r"both\s+(of\s+them|women|men|girls|guys)|"
+            r"(she|he)\s+and\s+(she|he|her|him)|"
+            r"(a\s+man\s+and\s+a\s+woman|a\s+woman\s+and\s+a\s+man)|"
+            r"(a\s+man\s+and\s+a\s+man|a\s+woman\s+and\s+a\s+woman)|"
+            r"couple|trio|they\s+(kiss|touch|embrace|undress|fuck|have))\b",
+            re.IGNORECASE,
         )
+        has_multi_subject = bool(_multi_re.search(user_input + " " + scene_context))
+        if has_multi_subject:
+            multi_instruction = (
+                "\n[MULTI-SUBJECT INSTRUCTION: This scene has two or more people. "
+                "For EACH person establish: their position in the frame (left/right/foreground/background), "
+                "their spatial relationship to the other person (facing, beside, behind, above, etc.), "
+                "and keep track of who is doing what throughout — never let actions become ambiguous. "
+                "When referring back to them use consistent descriptors (e.g. 'the dark-haired woman', "
+                "'the taller man') — not just 'she' or 'he' which causes confusion with two subjects.]"
+            )
+        else:
+            multi_instruction = ""
+
+        # --- Dialogue instruction ---
+        if invent_dialogue:
+            dialogue_instruction = (
+                "\n\n[DIALOGUE INSTRUCTION: Invent dialogue that fits this scene naturally. "
+                "Write it as inline prose woven into the action — NOT as a [DIALOGUE: ...] tag or bracketed block. "
+                "The spoken words sit inside the sentence with attribution and physical delivery, like a novel. "
+                "Examples: "
+                "'He leans back, satisfied, \"I think I\\'ll have to go back tomorrow for more,\" he chuckles, his eyes crinkling at the corners.' "
+                "'\"Don\\'t stop,\" she breathes, gripping the sheets, her voice barely above a whisper.' "
+                "If the scene is sexual or explicit, dialogue must reflect that — breathless, reactive, commanding. "
+                "Never write a bare floating quote. Never use [DIALOGUE: ...] tags. Dialogue is part of the prose, always.]"
+            )
+        else:
+            has_user_dialogue = bool(re.search(r'["\u201c\u201d]', user_input))
+            if has_user_dialogue:
+                dialogue_instruction = (
+                    "\n\n[DIALOGUE INSTRUCTION: Use ONLY the dialogue the user provided — do not invent or add any additional spoken words. "
+                    "Place their exact words naturally in the scene as inline prose with attribution and delivery. "
+                    "Examples: 'She smiles, \"I\\'m so happy,\" her voice bright, eyes wide.' "
+                    "'\"I\\'m so happy,\" he whispers, pulling her close, his voice low.' "
+                    "Never use [DIALOGUE: ...] tags. Weave the words into the action as part of the prose.]"
+                )
+            else:
+                dialogue_instruction = (
+                    "\n\n[DIALOGUE INSTRUCTION: No dialogue in this scene. No spoken words. "
+                    "Describe only ambient sound — maximum 2 sounds. Format: [AMBIENT: sound 1, sound 2]]"
+                )
+
+        # Tell the model the token budget AND the hard action cap together
+        # so both constraints are visible in the same instruction block.
+        length_instruction = (
+            f"\n[PACING — THIS IS MANDATORY: {pacing_hint} "
+            f"Write approximately {token_val} tokens total. "
+            f"Do not exceed the action count above under any circumstances.]"
+        )
+
+        # --- Merge vision context if provided ---
+        # When a scene_context is wired in from the Vision Describe node,
+        # prepend it so the LLM uses it as the authoritative subject/scene
+        # description rather than inventing one from scratch.
+        if scene_context and scene_context.strip():
+            effective_input = (
+                f"[SCENE CONTEXT FROM IMAGE — use this as the authoritative description "
+                f"of the subject and setting; do not invent or contradict it]\n"
+                f"{scene_context.strip()}\n\n"
+                f"[USER DIRECTION — apply this as action, style, and mood over the above scene]\n"
+                f"{user_input.strip()}"
+            )
+        else:
+            effective_input = user_input.strip()
+
+        # --- LoRA trigger injection ---
+        # If the user provided trigger words, inject them as a hard instruction
+        # so they appear at the start of the final prompt and are never buried.
+        if lora_triggers and lora_triggers.strip():
+            lora_instruction = (
+                f"\n[LORA INSTRUCTION: You MUST begin the prompt output with these exact trigger words "
+                f"before anything else: {lora_triggers.strip()} — place them as the very first words of your output, "
+                f"then continue with the scene description immediately after.]"
+            )
+        else:
+            lora_instruction = ""
 
         # --- Build messages ---
         messages = [
             {"role": "system", "content": self.SYSTEM_PROMPT},
-            {"role": "user",   "content": user_input.strip() + dialogue_instruction + explicit_instruction + length_instruction},
+            {"role": "user",   "content": effective_input + sequence_instruction + multi_instruction + dialogue_instruction + explicit_instruction + lora_instruction + length_instruction},
         ]
 
-        # ── apply_chat_template compatibility fix ────────────────────────────
-        # Older transformers versions return a plain tensor; newer versions (4.43+)
-        # may return a BatchEncoding dict depending on the tokenizer/template.
-        # We normalise both cases into a plain LongTensor before calling .shape.
-        raw = self.tokenizer.apply_chat_template(
+        input_ids = self.tokenizer.apply_chat_template(
             messages,
             return_tensors="pt",
             add_generation_prompt=True,
-        )
-
-        # BatchEncoding / dict-like: extract the input_ids tensor
-        if hasattr(raw, "input_ids"):
-            input_ids = raw.input_ids.to(self.model.device)
-        elif isinstance(raw, dict):
-            input_ids = raw["input_ids"].to(self.model.device)
-        else:
-            # Already a plain tensor — original behaviour
-            input_ids = raw.to(self.model.device)
-        # ────────────────────────────────────────────────────────────────────
+        ).to(self.model.device)
 
         input_length = input_ids.shape[1]
 
@@ -464,7 +661,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             output_ids = self.model.generate(
                 input_ids,
                 min_new_tokens=min_tokens,
-                max_new_tokens=token_val,
+                max_new_tokens=max_tokens_actual,
                 temperature=temperature,
                 do_sample=True,
                 top_k=40,
@@ -489,10 +686,13 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         # Regex clean as a last-resort safety net (should rarely trigger now)
         result = self._clean_output(result)
 
+        # --- Build negative prompt ---
+        neg_prompt = _build_negative_prompt(result, user_input)
+
         if not keep_model_loaded:
             self.unload_model()
 
-        return (result, result, frame_count)
+        return (result, result, neg_prompt)
 
 
 # ── ComfyUI boilerplate ──────────────────────────────────────────────────────

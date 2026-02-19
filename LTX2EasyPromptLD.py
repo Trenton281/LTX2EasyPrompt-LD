@@ -1,16 +1,11 @@
 import re
 import os
 
-# ── Force offline mode before ANY HuggingFace code runs ─────────────────────
-# HF Hub can make network calls at import time (e.g. checking /api/models/...).
-# Setting these env vars here — before the transformers import — ensures the
-# library never attempts a socket connection regardless of what happens later.
-# Users can override this per-run via the offline_mode toggle on the node,
-# but this default protects firewalled / offline machines immediately.
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-# Also disable the huggingface_hub telemetry/update checks
+# ── HuggingFace housekeeping ─────────────────────────────────────────────────
+# Only disable telemetry at import time — safe, does not block downloads.
+# Offline/online state is controlled per-run via the offline_mode toggle.
+# Do NOT set TRANSFORMERS_OFFLINE / HF_HUB_OFFLINE here — doing so at module
+# import time blocks downloads even when offline_mode is OFF.
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 # ─────────────────────────────────────────────────────────────────────────────

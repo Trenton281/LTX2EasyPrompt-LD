@@ -385,40 +385,63 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             flags=re.DOTALL | re.IGNORECASE,
         ).strip()
 
+        # Strip model loop/panic — hits token ceiling and repeats stop phrases.
+        # NOTE: no \n requirement — panic starts inline after last sentence.
+        text = re.sub(
+            r"\s*(Ended\.\s*\d+\s*actions|"
+            r"\d+\s+actions[\.,]\s*\d+\s+tokens|"
+            r"\d+\s+tokens[\.,]\s*Done|"
+            r"Done\.\s+\d+\s+seconds|"
+            r"Finished\.\s+\d+|"
+            r"The end\.\s+\d+\s+seconds|"
+            r"Fading to black\.\s+The end|"
+            r"The model stops|The output ends here|The scene ends here|"
+            r"It\'s complete now|All done\.|Stop now\.|"
+            r"End of prompt|End of output|No more to add|Nothing to revise|"
+            r"The work is (?:done|finished|complete)|The prompt is (?:done|finished|complete)|"
+            r"No further writing|No more writing|Stop\.\s+Finish|Finished\.\s+Complete|"
+            r"The scene is complete|The scene is over|Complete\.\s+Finished|"
+            r"Done\.\s+No more|BorderSide:).*$",
+            "",
+            text,
+            flags=re.DOTALL | re.IGNORECASE,
+        ).strip()
+
+        # Strip filler character spam — e.g. "a a a a a a a a a a" repeated tokens
+        text = re.sub(r"(\s*\b(\w)\b\s*){10,}", " ", text).strip()
+
+        # Strip token+action count combos inline or at end — e.g. "(840 tokens, 7 actions)"
+        text = re.sub(r"\s*\(\d+\s+tokens?[^)]*\)", "", text, flags=re.IGNORECASE).strip()
+
+        # Strip compliance checklist spam — 2+ consecutive parens after last sentence
+        text = re.sub(r"\s*(\([^)]{5,120}\)\s*){2,}$", "", text, flags=re.DOTALL).strip()
+
+        # Strip single trailing compliance paren with known instruction keywords
+        text = re.sub(
+            r"\s*\([^)]{0,200}(no setup|no resolution|action count|actions adhered|"
+            r"token count|pacing|dialogue integrated|character age|inline prose|"
+            r"no padding|no extraneous|exactly \d+ action|hard stop|BorderSide)[^)]{0,200}\)\s*$",
+            "",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        ).strip()
+
+        # Strip leaked pacing instruction echoes — e.g. "(Exact timing: 0-4 sec: Soaring...)"
+        text = re.sub(r"\(Exact timing:.*?\)", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+
+        # Strip token/word count lines — e.g. "Token count: 256"
+        text = re.sub(r"\s*\n*(token|word)\s+count\s*:\s*\d+.*$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+
         # 5. Strip leaked internal pacing/time tags the model sometimes echoes back
         text = re.sub(r"\[TIME LIMIT[^\]]*\]", "", text, flags=re.IGNORECASE).strip()
         text = re.sub(r"\[PACING[^\]]*\]",     "", text, flags=re.IGNORECASE).strip()
 
-        # Strip leaked timestamp — e.g. "(42221149502953 seconds)" appended by model
+        # Strip leaked timestamp — e.g. "(42221149502953 seconds)" or "(0:00 - 4:00)"
         text = re.sub(r"\s*\(\d+\s+seconds?\)\s*$", "", text).strip()
+        text = re.sub(r"\s*\(\d+:\d+\s*[-–]\s*\d+:\d+\)\s*", " ", text).strip()
 
-        # Strip leaked token count annotations anywhere — e.g. "(256 tokens)"
-        text = re.sub(r"\s*\(\d+\s+tokens?\)", "", text, flags=re.IGNORECASE).strip()
-
-        # Strip leaked MM:SS - MM:SS timestamp ranges — e.g. "(0:00 - 4:00)"
-        text = re.sub(r"\s*\(\d+:\d+\s*[-–]\s*\d+:\d+\)\s*$", "", text).strip()
-
-        # Strip inline action-time annotations — e.g. "(The action takes up roughly 5 seconds...)"
-        text = re.sub(r"\s*\(The action takes up roughly[^\)]*\)\s*", " ", text, flags=re.IGNORECASE).strip()
-
-        # Strip model self-commentary about actions/timing
-        # e.g. "(The first 5-second action ends here.)" "(Hard stop, exactly 10 seconds)"
-        # "(Last sentence)" "(2 actions, exactly)" etc.
-        text = re.sub(
-            r"\s*\([^)]{0,150}(action ends|scene ends|scene concludes|second action|"
-            r"concludes with|ends here|hard stop|last sentence|actions?,\s*exactly|"
-            r"exactly \d+ seconds?|no token count|no explanation|no excess|no extras|"
-            r"just the scene|no preamble|no revision)[^)]{0,150}\)\s*",
-            " ", text, flags=re.IGNORECASE
-        ).strip()
-
-        # Strip instruction echo spam — model sometimes dumps all its instructions
-        # as a parenthesised checklist at the end: (hard stop)(no excess)(exact dialogue)...
-        # Match any run of 3+ consecutive parenthesised phrases
-        text = re.sub(r"(\s*\([^)]{1,80}\)){3,}", "", text).strip()
-
-        # Strip leaked token/word count lines — e.g. "Token count: 256"
-        text = re.sub(r"\s*\n*(token|word)\s+count\s*:\s*\d+.*$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+        # Strip inline action-time annotations — e.g. "(The action takes up roughly 5 seconds)"
+        text = re.sub(r"\(The action takes up roughly[^\)]*\)", " ", text, flags=re.IGNORECASE).strip()
 
         # 6. Strip screenplay-style bracketed camera directions
         #    e.g. (DOWN 10 degrees), (Pull back 5), (HOLD), (Fade to black), (Zoom in to...)
@@ -535,9 +558,9 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         # ~120 tokens per action beat gives rich prose without padding.
         # Hard floor of 256 so very short clips still get a usable prompt.
         # Hard ceiling of 800 — anything above causes model drift.
-        token_val = max(256, min(800, action_count * 120))
-        max_tokens_actual = int(token_val * 1.10)  # tight ceiling — 10% headroom to finish last sentence cleanly
-        min_tokens = int(token_val * 0.75)         # high floor forces model to fill budget but not exceed it
+        token_val = max(256, min(1200, action_count * 120))
+        max_tokens_actual = int(token_val * 1.05)
+        min_tokens = int(token_val * 0.75)
         print(f"[LTX2] Dynamic token budget: {token_val} target / {max_tokens_actual} max (actions: {action_count}, frames: {frame_count}, seconds: {real_seconds:.0f})")
 
         # --- Temperature ---
@@ -747,9 +770,8 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             f"\n[PACING — THIS IS MANDATORY: {pacing_hint} "
             f"Write approximately {token_val} tokens total. "
             f"Do not exceed the action count above under any circumstances. "
-            f"Do NOT echo, repeat, or summarise any instructions in your output — not in brackets, not in parentheses, not at the end. "
-            f"Do NOT write token counts, word counts, action counts, or any parenthetical notes. "
-            f"The scene ends with the last sentence of prose. Nothing after it.]"
+            f"Do NOT write the token count, word count, action number, or any parenthetical summary, checklist, or compliance note at the end — "
+            f"the scene ends with the last sentence of prose. Nothing after it. No brackets. No notes. No confirmation.]"
         )
 
         # --- Merge vision context if provided ---

@@ -1,12 +1,16 @@
 import re
 import os
 
-# ── HuggingFace housekeeping ─────────────────────────────────────────────────
-# Only disable telemetry/token checks at import time — these are safe and have
-# no effect on downloading models.
-# Do NOT set TRANSFORMERS_OFFLINE / HF_HUB_OFFLINE here: doing so at module
-# import time would block downloads even when the user has offline_mode = False.
-# Offline mode is handled per-run inside load_model() via the offline_mode toggle.
+# ── Force offline mode before ANY HuggingFace code runs ─────────────────────
+# HF Hub can make network calls at import time (e.g. checking /api/models/...).
+# Setting these env vars here — before the transformers import — ensures the
+# library never attempts a socket connection regardless of what happens later.
+# Users can override this per-run via the offline_mode toggle on the node,
+# but this default protects firewalled / offline machines immediately.
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+# Also disable the huggingface_hub telemetry/update checks
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 # ─────────────────────────────────────────────────────────────────────────────
@@ -467,7 +471,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
                 f"Write EXACTLY {action_count} distinct actions — no more. "
                 f"Each action should take roughly {real_seconds / action_count:.0f} seconds of screen time. "
                 f"Do not add setup, backstory, or resolution beyond these {action_count} actions. "
-                f"Stop when the {action_count}{('st' if action_count % 10 == 1 and action_count % 100 != 11 else 'nd' if action_count % 10 == 2 and action_count % 100 != 12 else 'rd' if action_count % 10 == 3 and action_count % 100 != 13 else 'th')} action is complete."
+                f"Stop when the {action_count}{'nd' if action_count == 2 else 'rd' if action_count == 3 else 'th'} action is complete."
             )
 
         # --- Seed ---
@@ -669,11 +673,19 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             {"role": "user",   "content": effective_input + sequence_instruction + multi_instruction + dialogue_instruction + explicit_instruction + lora_instruction + length_instruction},
         ]
 
-        input_ids = self.tokenizer.apply_chat_template(
+        # Some tokenizer versions silently ignore return_tensors and return a
+        # plain Python list instead of a tensor — .shape then crashes.
+        # We handle both cases explicitly here.
+        raw = self.tokenizer.apply_chat_template(
             messages,
             return_tensors="pt",
             add_generation_prompt=True,
-        ).to(self.model.device)
+        )
+        if isinstance(raw, list):
+            # Tokenizer returned a flat list — wrap into a [1, seq_len] tensor
+            input_ids = torch.tensor([raw], dtype=torch.long).to(self.model.device)
+        else:
+            input_ids = raw.to(self.model.device)
 
         input_length = input_ids.shape[1]
 

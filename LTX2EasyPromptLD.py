@@ -77,11 +77,7 @@ class LTX2PromptArchitect:
                     "default": "a woman walks through a rain-soaked city street at night",
                     "tooltip": "Describe what you want to happen. Can be a rough idea, a sentence, or numbered steps (1. she stands 2. she walks). The LLM expands this into a full cinematic prompt."
                 }),
-                "max_tokens": ([
-                    "256 - Short & Tight",
-                    "512 - Standard Detail",
-                    "800 - High Density",
-                ], {"default": "512 - Standard Detail", "tooltip": "Controls how long the generated prompt is. 512 is a good starting point. Use 256 for short clips, 800 for long complex scenes."}),
+
                 "creativity": ([
                     "0.7 - Literal & Grounded",
                     "0.9 - Balanced Professional",
@@ -393,6 +389,9 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         text = re.sub(r"\[TIME LIMIT[^\]]*\]", "", text, flags=re.IGNORECASE).strip()
         text = re.sub(r"\[PACING[^\]]*\]",     "", text, flags=re.IGNORECASE).strip()
 
+        # Strip leaked timestamp — e.g. "(42221149502953 seconds)" appended by model
+        text = re.sub(r"\s*\(\d+\s+seconds?\)\s*$", "", text).strip()
+
         # 6. Strip screenplay-style bracketed camera directions
         #    e.g. (DOWN 10 degrees), (Pull back 5), (HOLD), (Fade to black), (Zoom in to...)
         text = re.sub(r"\((?:DOWN|UP|PULL|PUSH|ZOOM|HOLD|FADE|PAN|TILT|TRUCK|DOLLY|AMBIENT)[^\)]{0,80}\)", "", text, flags=re.IGNORECASE).strip()
@@ -455,7 +454,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         print(f"[LTX2] Stop token IDs: {unique}")
         return unique
 
-    def generate(self, bypass, user_input, max_tokens, creativity, seed, invent_dialogue, keep_model_loaded, offline_mode, frame_count, model, local_path_8b, local_path_3b, scene_context="", lora_triggers=""):
+    def generate(self, bypass, user_input, creativity, seed, invent_dialogue, keep_model_loaded, offline_mode, frame_count, model, local_path_8b, local_path_3b, scene_context="", lora_triggers=""):
         # ── Bypass mode — no model loaded, input passed straight through ────────
         if bypass:
             print("[LTX2] Bypass ON — skipping model, passing user_input directly.")
@@ -500,17 +499,15 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
 
-        # --- Token budget ---
-        token_val = int(max_tokens.split(" - ")[0])
-        # Generate up to 1.3× the requested count so the model has headroom to
-        # finish its last sentence without getting cut off mid-word.
-        # min is set to 50% so the model can wrap up naturally whenever ready
-        # rather than being forced to keep writing until it hits the ceiling.
-        # 256  → max_actual 332,  min ~128
-        # 512  → max_actual 665,  min ~256
-        # 800  → max_actual 1040, min ~400
-        max_tokens_actual = int(token_val * 1.3)
-        min_tokens = int(token_val * 0.50)
+        # --- Dynamic token budget ---
+        # Calculated from frame count so the two are always in sync.
+        # ~120 tokens per action beat gives rich prose without padding.
+        # Hard floor of 256 so very short clips still get a usable prompt.
+        # Hard ceiling of 800 — anything above causes model drift.
+        token_val = max(256, min(800, action_count * 120))
+        max_tokens_actual = int(token_val * 1.3)   # headroom to finish last sentence
+        min_tokens = int(token_val * 0.50)         # let model stop naturally if done
+        print(f"[LTX2] Dynamic token budget: {token_val} (actions: {action_count}, frames: {frame_count})")
 
         # --- Temperature ---
         temp_map = {
@@ -525,27 +522,48 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         # model hard-stops before it can write "assistant" or any turn boundary.
         stop_token_ids = self._build_stop_token_ids()
 
-        # --- Explicit content detection ---
-        # If the user's input contains explicit sexual terms, inject an instruction
-        # forcing the model to use direct anatomical language throughout —
-        # no euphemisms, no fade-outs, no implied action.
+        # --- Content tier detection ---
+        # Three tiers based on what the user actually asked for.
+        # Tier 1 — Neutral:  no nudity/sex words → no explicit instruction
+        # Tier 2 — Sensual:  nudity/undressing implied but no anatomical terms
+        #                    → restrain the model from self-escalating
+        # Tier 3 — Explicit: user used anatomical terms → full explicit instruction
+
+        # Tier 3 triggers: direct anatomical / act terms
         _explicit_re = re.compile(
-            r"\b(pussy|cock|dick|penis|vagina|clit|clitoris|anus|ass|asshole|"
-            r"tits|breasts|nipples|cum|orgasm|fuck|fucking|sex|naked|nude|"
-            r"blowjob|handjob|penetrat\w*|thrust\w*|spread\w*|squat\w*)\b",
+            r"\b(pussy|cock|dick|penis|vagina|clit|clitoris|anus|asshole|"
+            r"tits|cum|orgasm|fuck|fucking|blowjob|handjob|penetrat\w*|"
+            r"thrust\w*)\b",
             re.IGNORECASE,
         )
-        is_explicit = bool(_explicit_re.search(user_input))
 
-        # Detect clothing removal intent even in non-explicit prompts
+        # Tier 2 triggers: nudity/sensuality implied but not explicit
+        _sensual_re = re.compile(
+            r"\b(naked|nude|topless|undress\w*|strip\w*|takes?\s+off|"
+            r"removes?\s+(her|his|their|the)?\s*\w*\s*"
+            r"(shirt|dress|top|bra|pants|jeans|clothes|clothing|outfit|underwear|skirt|jacket|coat|robe)|"
+            r"disrobe\w*|unbutton\w*|unzip\w*|peels?\s+off|pulls?\s+off|"
+            r"shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress)|"
+            r"sensual|erotic|intimate|lingerie|bare\s+skin|bare\s+body)\b",
+            re.IGNORECASE,
+        )
+
+        is_explicit    = bool(_explicit_re.search(user_input))
+        is_sensual     = bool(_sensual_re.search(user_input)) and not is_explicit
+
+        # Undressing detection still used inside tier 3 for the mandatory segment rule
         _undress_re = re.compile(
-            r"\b(undress\w*|strip\w*|takes?\s+off|removes?\s+(her|his|their|the)?\s*\w*\s*(shirt|dress|top|bra|pants|jeans|clothes|clothing|outfit|underwear|skirt|jacket|coat|robe)|"
-            r"disrobe\w*|unbutton\w*|unzip\w*|peels?\s+off|pulls?\s+off|shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress))\b",
+            r"\b(undress\w*|strip\w*|takes?\s+off|"
+            r"removes?\s+(her|his|their|the)?\s*\w*\s*"
+            r"(shirt|dress|top|bra|pants|jeans|clothes|clothing|outfit|underwear|skirt|jacket|coat|robe)|"
+            r"disrobe\w*|unbutton\w*|unzip\w*|peels?\s+off|pulls?\s+off|"
+            r"shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress))\b",
             re.IGNORECASE,
         )
         has_undressing = bool(_undress_re.search(user_input))
 
         if is_explicit:
+            # ── Tier 3: user asked for explicit content ──────────────────────
             explicit_instruction = (
                 "\n[INSTRUCTION: This is an explicit adult scene. "
                 "You MUST use direct anatomical terms — pussy, cock, anus, clit, ass — exactly as written. "
@@ -562,21 +580,31 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
                 "Describe body parts, positions, and physical actions with blunt, specific language. "
                 "Every anatomical detail must be stated plainly — no softening, no implying, no cutting away.]"
             )
+        elif is_sensual:
+            # ── Tier 2: nudity/undressing implied — sensual but not pornographic ─
+            undress_clause = (
+                "UNDRESSING SEGMENT — MANDATORY: The prompt involves clothing removal or nudity. "
+                "Write a dedicated undressing segment as its own narrative beat — garment by garment, "
+                "describing how each is removed and what is physically revealed at each step. "
+                "The camera lingers on each reveal. Do not skip or compress. "
+                "Describing bare skin, curves, and the naked body is appropriate and expected. "
+            ) if has_undressing else ""
+            explicit_instruction = (
+                "\n[INSTRUCTION: This scene involves nudity or sensual content. "
+                "Describing the bare body naturally is appropriate — skin, curves, flesh, nakedness. "
+                "However, do NOT zoom in on or explicitly describe genitals. "
+                "Do NOT introduce sexual acts the user did not ask for. "
+                "Do NOT self-escalate beyond what the user described. "
+                "Keep the tone sensual and cinematic — not pornographic. "
+                "Always state the character's age as a specific number. "
+                + undress_clause + "]"
+            )
         else:
-            if has_undressing:
-                explicit_instruction = (
-                    "\n[INSTRUCTION: Always state the character's age as a specific number, "
-                    "e.g. 'a 34-year-old man' — never omit or approximate it. "
-                    "UNDRESSING SEGMENT — MANDATORY: The prompt involves clothing removal. "
-                    "You MUST write a dedicated undressing segment as its own narrative beat. "
-                    "Go garment by garment: name it, describe how it is removed, describe what is revealed. "
-                    "The camera lingers on each step. Do not skip or compress — the undressing is a full scene segment.]"
-                )
-            else:
-                explicit_instruction = (
-                    "\n[INSTRUCTION: Always state the character's age as a specific number, "
-                    "e.g. 'a 34-year-old man' — never omit or approximate it.]"
-                )
+            # ── Tier 1: neutral — just enforce age rule ──────────────────────
+            explicit_instruction = (
+                "\n[INSTRUCTION: Always state the character's age as a specific number, "
+                "e.g. 'a 34-year-old man' — never omit or approximate it.]"
+            )
 
 
         # --- Sequence detection ---
@@ -596,6 +624,31 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             )
         else:
             sequence_instruction = ""
+
+        # --- Person detection ---
+        # If the input contains no reference to a person, inject an instruction
+        # telling the model to write a pure scene — no invented characters.
+        _person_re = re.compile(
+            r"\b(he|she|his|her|him|they|them|their|man|woman|girl|boy|guy|"
+            r"person|people|couple|figure|character|model|actress|actor|"
+            r"someone|anybody|nobody|stranger|friend|lover|wife|husband|"
+            r"boyfriend|girlfriend|teenager|adult|female|male|blonde|brunette|"
+            r"redhead|nude|naked)\b",
+            re.IGNORECASE,
+        )
+        has_person = bool(_person_re.search(user_input + " " + scene_context))
+        if not has_person:
+            no_person_instruction = (
+                "\n[SCENE INSTRUCTION: The user has not described any person or character. "
+                "Do NOT invent or introduce any human figures, silhouettes, voices, or implied presence. "
+                "This is a pure environment or object scene. Write only what the user described — "
+                "the setting, objects, light, atmosphere, and motion of non-human elements. "
+                "No characters. No 'someone', no 'a figure', no implied human presence of any kind. "
+                "No dialogue, no whispers, no voices. Sound is limited to the environment only — "
+                "wind, rain, fire, machinery, animals, ambient room tone. Nothing with a human source.]"
+            )
+        else:
+            no_person_instruction = ""
 
         # --- Multi-subject detection ---
         # If the input describes two or more people, inject a spatial instruction
@@ -624,7 +677,11 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             multi_instruction = ""
 
         # --- Dialogue instruction ---
-        if invent_dialogue:
+        # If there's no person in the scene, skip dialogue entirely regardless
+        # of the invent_dialogue toggle — a voiceless environment can't speak.
+        if not has_person:
+            dialogue_instruction = ""  # no_person_instruction already covers this
+        elif invent_dialogue:
             dialogue_instruction = (
                 "\n\n[DIALOGUE INSTRUCTION: Invent dialogue that fits this scene naturally. "
                 "Write it as inline prose woven into the action — NOT as a [DIALOGUE: ...] tag or bracketed block. "
@@ -690,7 +747,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         # --- Build messages ---
         messages = [
             {"role": "system", "content": self.SYSTEM_PROMPT},
-            {"role": "user",   "content": effective_input + sequence_instruction + multi_instruction + dialogue_instruction + explicit_instruction + lora_instruction + length_instruction},
+            {"role": "user",   "content": effective_input + sequence_instruction + no_person_instruction + multi_instruction + dialogue_instruction + explicit_instruction + lora_instruction + length_instruction},
         ]
 
         # apply_chat_template returns different types depending on the

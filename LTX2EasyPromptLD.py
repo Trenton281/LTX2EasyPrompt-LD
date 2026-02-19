@@ -127,6 +127,14 @@ class LTX2PromptArchitect:
                     "placeholder": "Local path to Llama-3.2 3B snapshot folder",
                     "tooltip": "Optional. Paste the full path to your locally downloaded Llama 3.2 3B snapshot folder. Leave blank to use the HuggingFace cache automatically."
                 }),
+                "gpu_memory_gb": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 80,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "Maximum GPU VRAM to use in GB. Set to 0 to use all available VRAM (default — no change for most users). If you get OOM errors with the 8B, set this to e.g. 10 and the overflow spills to system RAM automatically."
+                }),
             },
             "optional": {
                 "scene_context": ("STRING", {
@@ -213,7 +221,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         self.model = None
         self.loaded_model_key = None  # tracks which model is currently in VRAM
 
-    def load_model(self, model_key: str, offline_mode: bool, local_path: str):
+    def load_model(self, model_key: str, offline_mode: bool, local_path: str, gpu_memory_gb: int = 0):
         # ── Switch detection ─────────────────────────────────────────────────
         # If a different model is requested, unload the current one first
         if self.model is not None and self.loaded_model_key != model_key:
@@ -269,12 +277,21 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
 
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
+        # Build max_memory so accelerate caps GPU usage and spills to system RAM.
+        # If gpu_memory_gb is 0, pass None — identical to not setting it at all.
+        if gpu_memory_gb > 0:
+            max_memory = {0: f"{gpu_memory_gb}GiB", "cpu": "48GiB"}
+            print(f"[LTX2] GPU cap: {gpu_memory_gb}GB — overflow will spill to system RAM.")
+        else:
+            max_memory = None
+
         self.model = AutoModelForCausalLM.from_pretrained(
             model_source,
             device_map="auto",
             torch_dtype=dtype,
             trust_remote_code=True,
             local_files_only=offline_mode,
+            max_memory=max_memory,
         )
 
         self.model.config.use_cache = True
@@ -430,7 +447,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         print(f"[LTX2] Stop token IDs: {unique}")
         return unique
 
-    def generate(self, bypass, user_input, max_tokens, creativity, seed, invent_dialogue, keep_model_loaded, offline_mode, frame_count, model, local_path_8b, local_path_3b, scene_context="", lora_triggers=""):
+    def generate(self, bypass, user_input, max_tokens, creativity, seed, invent_dialogue, keep_model_loaded, offline_mode, frame_count, model, local_path_8b, local_path_3b, gpu_memory_gb=0, scene_context="", lora_triggers=""):
         # ── Bypass mode — no model loaded, input passed straight through ────────
         if bypass:
             print("[LTX2] Bypass ON — skipping model, passing user_input directly.")
@@ -443,7 +460,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             "3B - Llama-3.2 Abliterated (Low VRAM)": local_path_3b,
         }
         local_path = path_map.get(model, "")
-        self.load_model(model_key=model, offline_mode=offline_mode, local_path=local_path)
+        self.load_model(model_key=model, offline_mode=offline_mode, local_path=local_path, gpu_memory_gb=gpu_memory_gb)
 
         # --- Timing & pacing ---
         # Convert frames to real seconds, then calculate a hard action count cap.

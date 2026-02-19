@@ -5,12 +5,8 @@ import numpy as np
 from PIL import Image
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
-# ── HuggingFace housekeeping ─────────────────────────────────────────────────
-# Only disable telemetry at import time — safe, does not block downloads.
-# Offline/online state is controlled per-run via the offline_mode toggle.
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def comfy_tensor_to_pil(tensor) -> Image.Image:
@@ -61,6 +57,14 @@ class LTX2VisionDescribe:
                     "placeholder": "Optional: local snapshot path (overrides model dropdown)",
                     "tooltip": "Optional. Paste the full path to a locally downloaded model snapshot folder. This overrides the model dropdown above. Leave blank to use HuggingFace cache automatically."
                 }),
+                "gpu_memory_gb": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 80,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "Maximum GPU VRAM to use in GB. Set to 0 to use all available VRAM (default). If you get OOM errors with the 7B, set this to e.g. 10 and the overflow spills to system RAM automatically."
+                }),
             },
         }
 
@@ -69,7 +73,7 @@ class LTX2VisionDescribe:
     FUNCTION      = "describe"
     CATEGORY      = "LTX2"
 
-    def describe(self, image, model_name, offline_mode, local_path):
+    def describe(self, image, model_name, offline_mode, local_path, gpu_memory_gb=0):
         global _INSTANCE
 
         hf_id = MODEL_OPTIONS[model_name]
@@ -77,11 +81,9 @@ class LTX2VisionDescribe:
         # ── Offline env ───────────────────────────────────────────────────────
         if offline_mode:
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
-            os.environ["HF_DATASETS_OFFLINE"] = "1"
             os.environ["HF_HUB_OFFLINE"] = "1"
         else:
             os.environ.pop("TRANSFORMERS_OFFLINE", None)
-            os.environ.pop("HF_DATASETS_OFFLINE", None)
             os.environ.pop("HF_HUB_OFFLINE", None)
 
         # ── Resolve source ────────────────────────────────────────────────────
@@ -114,6 +116,14 @@ class LTX2VisionDescribe:
             dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
             print(f"[VisionDescribe] Loading {model_name}...")
 
+            # Build max_memory dict so accelerate caps GPU usage and spills to RAM.
+            # If gpu_memory_gb is 0, let accelerate use all available VRAM automatically.
+            if gpu_memory_gb > 0:
+                max_memory = {0: f"{gpu_memory_gb}GiB", "cpu": "48GiB"}
+                print(f"[VisionDescribe] GPU cap: {gpu_memory_gb}GB — overflow will spill to system RAM.")
+            else:
+                max_memory = None
+
             _INSTANCE["processor"] = AutoProcessor.from_pretrained(
                 source, local_files_only=offline_mode
             )
@@ -122,6 +132,7 @@ class LTX2VisionDescribe:
                 device_map="auto",
                 torch_dtype=dtype,
                 local_files_only=offline_mode,
+                max_memory=max_memory,
             )
             _INSTANCE["model"].eval()
             _INSTANCE["source"] = source

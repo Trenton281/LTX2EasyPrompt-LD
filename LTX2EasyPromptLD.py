@@ -81,8 +81,7 @@ class LTX2PromptArchitect:
                     "256 - Short & Tight",
                     "512 - Standard Detail",
                     "800 - High Density",
-                    "1024 - Maximum Narrative Detail"
-                ], {"default": "512 - Standard Detail", "tooltip": "Controls how long the generated prompt is. 512 is a good starting point. Use 256 for short clips, 1024 for long complex scenes."}),
+                ], {"default": "512 - Standard Detail", "tooltip": "Controls how long the generated prompt is. 512 is a good starting point. Use 256 for short clips, 800 for long complex scenes."}),
                 "creativity": ([
                     "0.7 - Literal & Grounded",
                     "0.9 - Balanced Professional",
@@ -126,14 +125,6 @@ class LTX2PromptArchitect:
                     "multiline": False,
                     "placeholder": "Local path to Llama-3.2 3B snapshot folder",
                     "tooltip": "Optional. Paste the full path to your locally downloaded Llama 3.2 3B snapshot folder. Leave blank to use the HuggingFace cache automatically."
-                }),
-                "gpu_memory_gb": ("INT", {
-                    "default": 0,
-                    "min": 0,
-                    "max": 80,
-                    "step": 1,
-                    "display": "number",
-                    "tooltip": "Maximum GPU VRAM to use in GB. Set to 0 to use all available VRAM (default — no change for most users). If you get OOM errors with the 8B, set this to e.g. 10 and the overflow spills to system RAM automatically."
                 }),
             },
             "optional": {
@@ -187,7 +178,7 @@ If the subject is clothed at the start and the scene involves nudity, stripping,
   - Do NOT jump from clothed to naked. The transition IS the content. Treat it as its own scene segment with the same density as any other beat.
 
 6. Camera movement — describe camera motion as prose, not bracketed directions. Never write "(DOWN 10°)", "(Pull back)", "(Fade to black)", "(HOLD)" or any screenplay-style bracketed camera instruction. Instead write it as description: "the camera slowly tilts down to reveal the wet pavement", "the shot pulls back to frame the empty street", "the scene fades to black as she disappears around the corner."
-7. Audio — Always include ambient sound. ONE [AMBIENT: sound 1, sound 2] tag only — never repeat it. Place it once at the natural end of the scene.
+7. Audio — For each action beat, weave ambient sound naturally into the prose as a descriptive sentence or clause — never as a tag or label. Maximum 2 sounds active at any one time. The soundscape should evolve with the scene — each beat has its own sonic texture that matches its mood and energy. Do not stack more than 2 sounds at once or the audio will become overwhelming. Examples of correct format: "the refrigerator hums steadily in the background as she moves", "rain begins to tap softly against the window", "birdsong drifts through the gap in the curtains, barely audible over her breathing". Never write [AMBIENT: ...] tags. Sound is part of the prose, always.
    Dialogue — follow the DIALOGUE INSTRUCTION you are given exactly. When dialogue is included, write it as inline prose woven into the action — not as a labelled tag. The spoken words sit inside the sentence, attributed with delivery and physical action, exactly like a novel. Examples of correct format:
    'He leans back, satisfied, "I think I'll have to go back tomorrow for more," he chuckles, his eyes crinkling at the corners.'
    '"Don\'t stop," she breathes, gripping the sheets, her voice barely above a whisper.'
@@ -203,7 +194,7 @@ WRITING RULES:
 - Aim for 8–12 sentences of dense, flowing prose — not a bullet list
 - Write in sections separated by a single line break for clean model parsing
 
-IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary, labels, or any explanation. Do NOT write "Sure!", "Here's your prompt:", or anything like that. Do NOT add a checklist, compliance summary, note, or confirmation of instructions at the end — not in brackets, not as a "Note:", not in any form. The output ends when the scene ends. Nothing after the last sentence of the scene. Begin immediately with the video style or shot description."""
+IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary, labels, or any explanation. Do NOT write "Sure!", "Here's your prompt:", or anything like that. Do NOT add a checklist, compliance summary, note, or any confirmation of instructions at the end — not in brackets, not as a "Note:", not in any form. Do NOT write token counts, word counts, action counts, or any meta-commentary about what you wrote. Do NOT ask for feedback or offer to revise. The output ends when the scene ends. Nothing after the last sentence of the scene. Begin immediately with the video style or shot description."""
 
     _PREAMBLE_RE = re.compile(
         r"^(Sure!?|Certainly!?|Absolutely!?|Of course!?|Here(?:'s| is).*?:|Great!?)[^\n]*\n?",
@@ -221,7 +212,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         self.model = None
         self.loaded_model_key = None  # tracks which model is currently in VRAM
 
-    def load_model(self, model_key: str, offline_mode: bool, local_path: str, gpu_memory_gb: int = 0):
+    def load_model(self, model_key: str, offline_mode: bool, local_path: str):
         # ── Switch detection ─────────────────────────────────────────────────
         # If a different model is requested, unload the current one first
         if self.model is not None and self.loaded_model_key != model_key:
@@ -277,21 +268,12 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
 
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
-        # Build max_memory so accelerate caps GPU usage and spills to system RAM.
-        # If gpu_memory_gb is 0, pass None — identical to not setting it at all.
-        if gpu_memory_gb > 0:
-            max_memory = {0: f"{gpu_memory_gb}GiB", "cpu": "48GiB"}
-            print(f"[LTX2] GPU cap: {gpu_memory_gb}GB — overflow will spill to system RAM.")
-        else:
-            max_memory = None
-
         self.model = AutoModelForCausalLM.from_pretrained(
             model_source,
             device_map="auto",
             torch_dtype=dtype,
             trust_remote_code=True,
             local_files_only=offline_mode,
-            max_memory=max_memory,
         )
 
         self.model.config.use_cache = True
@@ -361,22 +343,50 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         #    - A "Note:" explanation block after the scene ends
         #    - A single parenthesised summary line: "(5 distinct actions within 20 seconds)"
         #    - Consecutive bracketed phrases: "(Exactly 4 actions)(Pacing strict)..."
+        #    - Self-justification paragraph: "1026 tokens, 15-second scene..." etc.
+        #    - Fake conversation loop: "Please let me know...", "Let me revise...", "Confirmed." etc.
         #    Order matters: strip Note: first so it doesn't shield bracket lines above it.
         text = re.sub(
-            r"\s*\n+Note:.*$",               # trailing Note: block (must go first)
+            r"\s*\n+Note:.*$",
             "",
             text,
             flags=re.DOTALL,
         ).strip()
+
+        # Strip everything AFTER the AMBIENT tag if one still appears (legacy cleanup)
+        # — the tag itself stays, but anything the model writes beyond it is garbage.
+        ambient_match = re.search(r"\[AMBIENT:[^\]]*\]", text, flags=re.IGNORECASE)
+        if ambient_match:
+            text = text[:ambient_match.end()].strip()
+
+        # Strip trailing (Lora: ...) tags the model echoes from the LoRA instruction
+        text = re.sub(r"\s*\(Lora:[^)]*\)\s*$", "", text, flags=re.IGNORECASE).strip()
+
+        # Strip trailing (Note: ...) blocks and everything after — use DOTALL so it
+        # catches multi-line notes and the bracket spam that follows them.
+        text = re.sub(r"\s*\(Note:.*$", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+
+        # Strip orphaned closing bracket spam: ) ) ) ) ) ...
+        text = re.sub(r"[\s)]{3,}$", "", text).strip()
+
+        # Catch the fake conversation / self-eval patterns
         text = re.sub(
-            r"(\s*\([^)]{5,}\)){2,}\s*$",   # consecutive bracketed phrases
+            r"\s*\n+\d+\s+tokens[\s,].*$",
             "",
             text,
+            flags=re.DOTALL | re.IGNORECASE,
         ).strip()
         text = re.sub(
-            r"\s*\(\d+[^)]{3,}\)\s*$",       # single parenthesised count/summary line
+            r"\s*\n+(Please let me know|Let me revise|No further revision|Confirmed\.|"
+            r"Written to meet|The scene is now over|The output ends|The task is|The task was|"
+            r"The goal was|Nothing more|No continuation|No additional|The response does not|"
+            r"It does not continue|It ceases when|Any such statement|"
+            r"Output length:|Action count:|Total time:|Last character:|I avoided|I wrote|"
+            r"I adhered|I hope this|Thank you for your|Please confirm|I submitted|"
+            r"I can revise|feel free to instruct).*$",
             "",
             text,
+            flags=re.DOTALL | re.IGNORECASE,
         ).strip()
 
         # 5. Strip leaked internal pacing/time tags the model sometimes echoes back
@@ -387,11 +397,9 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         #    e.g. (DOWN 10 degrees), (Pull back 5), (HOLD), (Fade to black), (Zoom in to...)
         text = re.sub(r"\((?:DOWN|UP|PULL|PUSH|ZOOM|HOLD|FADE|PAN|TILT|TRUCK|DOLLY|AMBIENT)[^\)]{0,80}\)", "", text, flags=re.IGNORECASE).strip()
 
-        # 7. Collapse multiple [AMBIENT: ...] tags down to the first one only
-        ambient_matches = re.findall(r"\[AMBIENT:[^\]]*\]", text, flags=re.IGNORECASE)
-        if len(ambient_matches) > 1:
-            for duplicate in ambient_matches[1:]:
-                text = text.replace(duplicate, "", 1)
+        # 7. Strip any [AMBIENT: ...] tags if the model still writes one (legacy fallback)
+        #    — convert it to clean prose by stripping the tag wrapper
+        text = re.sub(r"\[AMBIENT:\s*([^\]]*)\]", r"\1", text, flags=re.IGNORECASE).strip()
 
         # Clean up any double blank lines left by removals
         text = re.sub(r"\n{3,}", "\n\n", text).strip()
@@ -447,7 +455,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         print(f"[LTX2] Stop token IDs: {unique}")
         return unique
 
-    def generate(self, bypass, user_input, max_tokens, creativity, seed, invent_dialogue, keep_model_loaded, offline_mode, frame_count, model, local_path_8b, local_path_3b, gpu_memory_gb=0, scene_context="", lora_triggers=""):
+    def generate(self, bypass, user_input, max_tokens, creativity, seed, invent_dialogue, keep_model_loaded, offline_mode, frame_count, model, local_path_8b, local_path_3b, scene_context="", lora_triggers=""):
         # ── Bypass mode — no model loaded, input passed straight through ────────
         if bypass:
             print("[LTX2] Bypass ON — skipping model, passing user_input directly.")
@@ -460,7 +468,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             "3B - Llama-3.2 Abliterated (Low VRAM)": local_path_3b,
         }
         local_path = path_map.get(model, "")
-        self.load_model(model_key=model, offline_mode=offline_mode, local_path=local_path, gpu_memory_gb=gpu_memory_gb)
+        self.load_model(model_key=model, offline_mode=offline_mode, local_path=local_path)
 
         # --- Timing & pacing ---
         # Convert frames to real seconds, then calculate a hard action count cap.
@@ -501,7 +509,6 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         # 256  → max_actual 332,  min ~128
         # 512  → max_actual 665,  min ~256
         # 800  → max_actual 1040, min ~400
-        # 1024 → max_actual 1331, min ~512
         max_tokens_actual = int(token_val * 1.3)
         min_tokens = int(token_val * 0.50)
 
@@ -641,7 +648,8 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             else:
                 dialogue_instruction = (
                     "\n\n[DIALOGUE INSTRUCTION: No dialogue in this scene. No spoken words. "
-                    "Describe only ambient sound — maximum 2 sounds. Format: [AMBIENT: sound 1, sound 2]]"
+                    "Weave ambient sound naturally into the prose instead — maximum 2 sounds active at any one time, "
+                    "woven in as descriptive prose, not as tags.]"
                 )
 
         # Tell the model the token budget AND the hard action cap together

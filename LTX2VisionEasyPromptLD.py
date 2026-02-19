@@ -27,7 +27,8 @@ DESCRIBE_PROMPT = (
     "use plain words: breasts, nipples, pussy, penis, anus, buttocks. "
     "Describe their pose, what they are on or interacting with, "
     "the camera framing and angle, the lighting and time of day, and the setting. "
-    "Write it as one flowing paragraph. Do not use bullet points, lists, or labels."
+    "Write it as one flowing paragraph. Do not use bullet points, lists, or labels. "
+    "If there is no person in the image, describe the scene instead — the environment, setting, lighting, time of day, mood, and any notable objects or details."
 )
 
 
@@ -44,15 +45,17 @@ class LTX2VisionDescribe:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE",),
-                "model": (list(MODEL_OPTIONS.keys()), {
+                "image": ("IMAGE", {"tooltip": "Connect your starting image here. The vision model will analyse it and output a scene description for use with the Easy Prompt node."}),
+                "model_name": (list(MODEL_OPTIONS.keys()), {
                     "default": "Qwen2.5-VL-3B — Fast (huihui abliterated)",
+                    "tooltip": "3B is faster and uses ~6GB VRAM. 7B is slower but describes explicit content more accurately. Both download automatically on first run."
                 }),
-                "offline_mode": ("BOOLEAN", {"default": True}),
+                "offline_mode": ("BOOLEAN", {"default": False, "tooltip": "Turn ON if you have no internet connection. Uses locally cached models only. Leave OFF to allow automatic download from HuggingFace on first run."}),
                 "local_path": ("STRING", {
                     "default": "",
                     "multiline": False,
                     "placeholder": "Optional: local snapshot path (overrides model dropdown)",
+                    "tooltip": "Optional. Paste the full path to a locally downloaded model snapshot folder. This overrides the model dropdown above. Leave blank to use HuggingFace cache automatically."
                 }),
             },
         }
@@ -125,7 +128,10 @@ class LTX2VisionDescribe:
         print(f"[VisionDescribe] Image: {pil_image.size}")
 
         # ── Single inference ──────────────────────────────────────────────────
-        from qwen_vl_utils import process_vision_info
+        try:
+            from qwen_vl_utils import process_vision_info
+        except ImportError:
+            raise ImportError("[VisionDescribe] Missing: qwen-vl-utils. Fix: pip install qwen-vl-utils then restart ComfyUI.")
 
         messages = [
             {

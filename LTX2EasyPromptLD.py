@@ -76,56 +76,61 @@ class LTX2PromptArchitect:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "bypass": ("BOOLEAN", {"default": False}),
+                "bypass": ("BOOLEAN", {"default": False, "tooltip": "When ON, skips the LLM entirely and sends your text straight to the prompt encoder. Use for manual prompts or testing."}),
                 "user_input": ("STRING", {
                     "multiline": True,
-                    "default": "a woman walks through a rain-soaked city street at night"
+                    "default": "a woman walks through a rain-soaked city street at night",
+                    "tooltip": "Describe what you want to happen. Can be a rough idea, a sentence, or numbered steps (1. she stands 2. she walks). The LLM expands this into a full cinematic prompt."
                 }),
                 "max_tokens": ([
                     "256 - Short & Tight",
                     "512 - Standard Detail",
                     "800 - High Density",
                     "1024 - Maximum Narrative Detail"
-                ], {"default": "512 - Standard Detail"}),
+                ], {"default": "512 - Standard Detail", "tooltip": "Controls how long the generated prompt is. 512 is a good starting point. Use 256 for short clips, 1024 for long complex scenes."}),
                 "creativity": ([
                     "0.7 - Literal & Grounded",
                     "0.9 - Balanced Professional",
                     "1.1 - Artistic Expansion"
-                ], {"default": "0.9 - Balanced Professional"}),
+                ], {"default": "0.9 - Balanced Professional", "tooltip": "Controls how closely the LLM sticks to your input. 0.7 is literal and precise, 1.1 adds more cinematic flair and creative expansion."}),
                 "seed": ("INT", {
                     "default": -1,
                     "min": -1,
                     "max": 2**31 - 1,
                     "step": 1,
-                    "display": "number"
+                    "display": "number",
+                    "tooltip": "Set a fixed seed to get the same prompt expansion every run. Use -1 for a random result each time."
                 }),
-                "invent_dialogue": ("BOOLEAN", {"default": True}),
-                "keep_model_loaded": ("BOOLEAN", {"default": True}),
-                "offline_mode": ("BOOLEAN", {"default": True}),
+                "invent_dialogue": ("BOOLEAN", {"default": True, "tooltip": "When ON, the LLM invents natural spoken dialogue for characters woven into the scene. When OFF, only uses dialogue you wrote yourself (in quotes), or generates no dialogue at all."}),
+                "keep_model_loaded": ("BOOLEAN", {"default": False, "tooltip": "Keep the LLM in VRAM between runs for faster generation. Turn OFF to free VRAM immediately after each run — recommended if you have less than 16GB VRAM."}),
+                "offline_mode": ("BOOLEAN", {"default": False, "tooltip": "Turn ON if you have no internet. Uses locally cached models only. Turn OFF to allow auto-download from HuggingFace on first run."}),
                 "frame_count": ("INT", {
-                    "default": 120,
+                    "default": 192,
                     "min": 24,
                     "max": 960,
                     "step": 1,
-                    "display": "number"
+                    "display": "number",
+                    "tooltip": "Match this to your video LENGTH setting. Controls pacing — the LLM uses this to calculate how many actions fit in the clip. 24fps = 1 second, so 192 = 8 seconds."
                 }),
                 # ── Model selector ──────────────────────────────────────────
                 "model": ([
                     "8B - NeuralDaredevil (High Quality)",
                     "3B - Llama-3.2 Abliterated (Low VRAM)",
-                ], {"default": "8B - NeuralDaredevil (High Quality)"}),
+                ], {"default": "8B - NeuralDaredevil (High Quality)", "tooltip": "Choose your LLM. 8B gives better quality prompts and handles explicit content well. 3B is faster and uses less VRAM. Both download automatically on first run."}),
                 # ── Local paths for offline mode ────────────────────────────
                 # Point each field at the model's snapshot folder on disk.
                 # Leave blank to use the HF cache (requires a prior download).
                 "local_path_8b": ("STRING", {
                     "default": "",
                     "multiline": False,
-                    "placeholder": "e.g. C:\\Users\\YOU\\.cache\\huggingface\\hub\\models--mlabonne--NeuralDaredevil-8B-abliterated\\snapshots\\YOUR_HASH"
+                    "placeholder": "e.g. C:\\Users\\YOU\\.cache\\huggingface\\hub\\models--mlabonne--NeuralDaredevil-8B-abliterated\\snapshots\\YOUR_HASH",
+                    "tooltip": "Optional. Paste the full path to your locally downloaded NeuralDaredevil 8B snapshot folder. Leave blank to use the HuggingFace cache automatically."
                 }),
                 "local_path_3b": ("STRING", {
                     "default": "",
                     "multiline": False,
-                    "placeholder": "Local path to Llama-3.2 3B snapshot folder"
+                    "placeholder": "Local path to Llama-3.2 3B snapshot folder",
+                    "tooltip": "Optional. Paste the full path to your locally downloaded Llama 3.2 3B snapshot folder. Leave blank to use the HuggingFace cache automatically."
                 }),
             },
             "optional": {
@@ -133,11 +138,13 @@ class LTX2PromptArchitect:
                     "default": "",
                     "multiline": True,
                     "placeholder": "Optional: vision description from LTX-2 Vision Describe node",
+                    "tooltip": "Wire the output from the LTX-2 Vision Describe node here. The LLM will use your image as the authoritative starting point and animate it forward from your prompt."
                 }),
                 "lora_triggers": ("STRING", {
                     "default": "",
                     "multiline": False,
                     "placeholder": "Optional: LoRA trigger words e.g. 'ohwx woman, film grain'",
+                    "tooltip": "Paste your LoRA trigger words here. They will be injected at the very start of every generated prompt automatically — never buried or forgotten."
                 }),
             },
         }
@@ -176,8 +183,8 @@ If the subject is clothed at the start and the scene involves nudity, stripping,
   - Use camera-aware language — the camera lingers, cuts to, tilts down to reveal, holds on
   - Do NOT jump from clothed to naked. The transition IS the content. Treat it as its own scene segment with the same density as any other beat.
 
-6. Camera movement — specify direction, speed, and what the camera reveals or follows; describe what is visible before and after the move
-7. Audio — Always include ambient sound. Maximum 2 ambient sounds. Format: [AMBIENT: sound 1, sound 2]
+6. Camera movement — describe camera motion as prose, not bracketed directions. Never write "(DOWN 10°)", "(Pull back)", "(Fade to black)", "(HOLD)" or any screenplay-style bracketed camera instruction. Instead write it as description: "the camera slowly tilts down to reveal the wet pavement", "the shot pulls back to frame the empty street", "the scene fades to black as she disappears around the corner."
+7. Audio — Always include ambient sound. ONE [AMBIENT: sound 1, sound 2] tag only — never repeat it. Place it once at the natural end of the scene.
    Dialogue — follow the DIALOGUE INSTRUCTION you are given exactly. When dialogue is included, write it as inline prose woven into the action — not as a labelled tag. The spoken words sit inside the sentence, attributed with delivery and physical action, exactly like a novel. Examples of correct format:
    'He leans back, satisfied, "I think I'll have to go back tomorrow for more," he chuckles, his eyes crinkling at the corners.'
    '"Don\'t stop," she breathes, gripping the sheets, her voice barely above a whisper.'
@@ -360,6 +367,23 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             text,
         ).strip()
 
+        # 5. Strip leaked internal pacing/time tags the model sometimes echoes back
+        text = re.sub(r"\[TIME LIMIT[^\]]*\]", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\[PACING[^\]]*\]",     "", text, flags=re.IGNORECASE).strip()
+
+        # 6. Strip screenplay-style bracketed camera directions
+        #    e.g. (DOWN 10 degrees), (Pull back 5), (HOLD), (Fade to black), (Zoom in to...)
+        text = re.sub(r"\((?:DOWN|UP|PULL|PUSH|ZOOM|HOLD|FADE|PAN|TILT|TRUCK|DOLLY|AMBIENT)[^\)]{0,80}\)", "", text, flags=re.IGNORECASE).strip()
+
+        # 7. Collapse multiple [AMBIENT: ...] tags down to the first one only
+        ambient_matches = re.findall(r"\[AMBIENT:[^\]]*\]", text, flags=re.IGNORECASE)
+        if len(ambient_matches) > 1:
+            for duplicate in ambient_matches[1:]:
+                text = text.replace(duplicate, "", 1)
+
+        # Clean up any double blank lines left by removals
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
         return text.strip()
 
     def _build_stop_token_ids(self) -> list:
@@ -447,7 +471,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
                 f"Write EXACTLY {action_count} distinct actions — no more. "
                 f"Each action should take roughly {real_seconds / action_count:.0f} seconds of screen time. "
                 f"Do not add setup, backstory, or resolution beyond these {action_count} actions. "
-                f"Stop when the {action_count}{'st' if action_count == 1 else 'nd' if action_count == 2 else 'rd' if action_count == 3 else 'th'} action is complete."
+                f"Stop when the {action_count}{'nd' if action_count == 2 else 'rd' if action_count == 3 else 'th'} action is complete."
             )
 
         # --- Seed ---
@@ -702,15 +726,22 @@ class LTX2UnloadModel:
 
     @classmethod
     def INPUT_TYPES(s):
-        return {"required": {"architect": ("LTX2_ARCHITECT",)}}
+        return {"required": {}}
 
     RETURN_TYPES = ()
     FUNCTION = "unload"
     CATEGORY = "LTX2"
     OUTPUT_NODE = True
 
-    def unload(self, architect):
-        architect.unload_model()
+    def unload(self):
+        # Walk all live LTX2PromptArchitect instances and unload them
+        import gc
+        unloaded = 0
+        for obj in gc.get_objects():
+            if isinstance(obj, LTX2PromptArchitect) and obj.model is not None:
+                obj.unload_model()
+                unloaded += 1
+        print(f"[LTX2] Unload node: freed {unloaded} model instance(s).")
         return {}
 
 

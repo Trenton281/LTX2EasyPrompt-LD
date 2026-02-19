@@ -1,8 +1,5 @@
 import re
 import os
-import json
-import struct
-import folder_paths
 
 # ── HuggingFace housekeeping ─────────────────────────────────────────────────
 # Only disable telemetry at import time — safe, does not block downloads.
@@ -16,90 +13,6 @@ os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 import torch
 import gc
 from transformers import AutoModelForCausalLM, AutoTokenizer
-
-
-# ── LoRA trigger word detection ────────────────────────────────────────────────
-# Auto-detect trigger words from LoRA metadata (safetensors header, civitai
-# sidecar, metadata JSON, or plain .txt file next to the LoRA).
-
-_trigger_cache = {}
-
-
-def _detect_trigger_words(lora_path):
-    """Auto-detect trigger words from LoRA metadata. Returns comma-separated string or empty."""
-    if not lora_path or not os.path.isfile(lora_path):
-        return ""
-
-    if lora_path in _trigger_cache:
-        return _trigger_cache[lora_path]
-
-    result = ""
-
-    # 1. Safetensors header: ss_tag_frequency
-    if lora_path.lower().endswith(".safetensors"):
-        try:
-            with open(lora_path, "rb") as f:
-                header_len = struct.unpack("<Q", f.read(8))[0]
-                if header_len <= 50 * 1024 * 1024:  # sanity cap at 50MB
-                    header_json = json.loads(f.read(header_len))
-                    metadata = header_json.get("__metadata__", {})
-                    tag_freq_str = metadata.get("ss_tag_frequency", "")
-                    if tag_freq_str:
-                        tag_freq = json.loads(tag_freq_str)
-                        tags = []
-                        for _bucket, tag_dict in tag_freq.items():
-                            if isinstance(tag_dict, dict):
-                                for tag in tag_dict:
-                                    tag = tag.strip()
-                                    if tag and tag not in tags:
-                                        tags.append(tag)
-                        result = ", ".join(tags[:5])
-        except Exception:
-            pass
-
-    # 2. Sidecar fallback chain
-    if not result:
-        stem = os.path.splitext(lora_path)[0]
-
-        # .civitai.info → trainedWords array
-        civitai_path = stem + ".civitai.info"
-        if os.path.isfile(civitai_path):
-            try:
-                with open(civitai_path, "r", encoding="utf-8") as f:
-                    info = json.load(f)
-                    words = info.get("trainedWords", [])
-                    if isinstance(words, list) and words:
-                        result = ", ".join(w.strip() for w in words[:5] if w.strip())
-            except Exception:
-                pass
-
-        # .metadata.json → tags array
-        if not result:
-            meta_path = stem + ".metadata.json"
-            if os.path.isfile(meta_path):
-                try:
-                    with open(meta_path, "r", encoding="utf-8") as f:
-                        meta = json.load(f)
-                        tags = meta.get("tags", meta.get("trigger_words", []))
-                        if isinstance(tags, list) and tags:
-                            result = ", ".join(t.strip() for t in tags[:5] if t.strip())
-                except Exception:
-                    pass
-
-        # Plain .txt sidecar (one trigger per line or comma-separated)
-        if not result:
-            txt_path = stem + ".txt"
-            if os.path.isfile(txt_path):
-                try:
-                    with open(txt_path, "r", encoding="utf-8") as f:
-                        content = f.read().strip()
-                        if content and len(content) < 500:
-                            result = content
-                except Exception:
-                    pass
-
-    _trigger_cache[lora_path] = result
-    return result
 
 
 # ── Negative prompt builder ───────────────────────────────────────────────────
@@ -153,119 +66,11 @@ def _build_negative_prompt(result: str, user_input: str) -> str:
     return ", ".join(parts)
 
 
-# ── OpenAI-compatible API helpers ──────────────────────────────────────────────
-# These use only stdlib (urllib, json) — no new pip dependencies.
-# Imports are kept inside function bodies so HTTP code is never loaded
-# when only the transformers backend is used.
-
-_API_MODELS_CACHE: list = ["(server unreachable — check host/port)"]
-
-
-def _get_api_models_list() -> list:
-    """Fetch models from default LM Studio address for the dropdown."""
-    _fetch_api_models("127.0.0.1", 1234, timeout=2)
-    return _API_MODELS_CACHE[:]
-
-
-def _fetch_api_models(host: str, port: int, timeout: int = 5) -> list:
-    """GET /v1/models from the API server. Updates cache in-place."""
-    import urllib.request
-    import json as _json
-
-    global _API_MODELS_CACHE
-    url = f"http://{host}:{port}/v1/models"
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            data = _json.loads(resp.read().decode("utf-8"))
-            models = [m["id"] for m in data.get("data", []) if "id" in m]
-            _API_MODELS_CACHE = models if models else ["(no models loaded on server)"]
-    except Exception as e:
-        print(f"[LTX2-API] /v1/models fetch failed ({url}): {e}")
-        _API_MODELS_CACHE = ["(server unreachable — check host/port)"]
-    return _API_MODELS_CACHE[:]
-
-
-def _call_api(host: str, port: int, messages: list, params: dict,
-              timeout: int = 120) -> str:
-    """
-    POST /v1/chat/completions to an OpenAI-compatible local server.
-    Returns the assistant message content string.
-    """
-    import urllib.request
-    import urllib.error
-    import json as _json
-
-    url = f"http://{host}:{port}/v1/chat/completions"
-    payload = {
-        "model":       params["model"],
-        "messages":    messages,
-        "temperature": params.get("temperature", 0.7),
-        "max_tokens":  params.get("max_tokens", 512),
-        "stream":      False,
-    }
-    if "seed" in params:
-        payload["seed"] = params["seed"]
-    if "top_k" in params:
-        payload["top_k"] = params["top_k"]
-    if "top_p" in params:
-        payload["top_p"] = params["top_p"]
-    if "repeat_penalty" in params:
-        payload["repeat_penalty"] = params["repeat_penalty"]
-
-    body = _json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={
-            "Content-Type":  "application/json",
-            "Authorization": "Bearer local",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = _json.loads(resp.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"].strip()
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"[LTX2-API] HTTP {e.code} from {url}: {err_body}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(
-            f"[LTX2-API] Cannot connect to {url}. "
-            f"Is LM Studio / Ollama running? ({e.reason})"
-        ) from e
-    except (KeyError, IndexError, Exception) as e:
-        raise RuntimeError(f"[LTX2-API] Unexpected response format: {e}") from e
-
-
-def _unload_api_model(host: str, port: int, model_id: str) -> None:
-    """LM Studio-specific: POST /api/v1/models/unload to free VRAM."""
-    import urllib.request
-    import json as _json
-
-    url = f"http://{host}:{port}/api/v1/models/unload"
-    payload = _json.dumps({"instance_id": model_id}).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as _:
-            print(f"[LTX2-API] Model unloaded from server: {model_id}")
-    except Exception as e:
-        print(f"[LTX2-API] Model unload not supported by this server (OK): {e}")
-
-
 class LTX2PromptArchitect:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "backend": (
-                    ["Transformers (Direct)", "OpenAI-Compatible API"],
-                    {"default": "Transformers (Direct)"},
-                ),
                 "bypass": ("BOOLEAN", {"default": False, "tooltip": "When ON, skips the LLM entirely and sends your text straight to the prompt encoder. Use for manual prompts or testing."}),
                 "user_input": ("STRING", {
                     "multiline": True,
@@ -317,39 +122,6 @@ class LTX2PromptArchitect:
                     "placeholder": "Local path to Llama-3.2 3B snapshot folder",
                     "tooltip": "Optional. Paste the full path to your locally downloaded Llama 3.2 3B snapshot folder. Leave blank to use the HuggingFace cache automatically."
                 }),
-                # ── API backend settings (ignored when backend = Transformers) ──
-                "api_host": ("STRING", {
-                    "default": "127.0.0.1",
-                    "multiline": False,
-                    "placeholder": "LM Studio / Ollama server address",
-                }),
-                "api_port": ("INT", {
-                    "default": 1234,
-                    "min": 1,
-                    "max": 65535,
-                    "step": 1,
-                    "display": "number",
-                }),
-                "api_model": (_get_api_models_list(), {
-                    "default": _get_api_models_list()[0],
-                }),
-                "api_model_custom": ("STRING", {
-                    "default": "",
-                    "multiline": False,
-                    "placeholder": "Override: type model ID directly (use if dropdown is empty)",
-                }),
-                "api_top_k": ("INT", {
-                    "default": 40, "min": 0, "max": 200, "step": 1,
-                    "display": "number",
-                }),
-                "api_top_p": ("FLOAT", {
-                    "default": 0.9, "min": 0.0, "max": 1.0, "step": 0.05,
-                    "display": "number",
-                }),
-                "api_repeat_penalty": ("FLOAT", {
-                    "default": 1.07, "min": 0.0, "max": 3.0, "step": 0.01,
-                    "display": "number",
-                }),
             },
             "optional": {
                 "scene_context": ("STRING", {
@@ -361,21 +133,11 @@ class LTX2PromptArchitect:
                 "lora_triggers": ("STRING", {
                     "default": "",
                     "multiline": False,
-                    "placeholder": "Optional: LoRA trigger words e.g. 'ohwx woman, film grain' (overrides auto-detect)",
+                    "placeholder": "Optional: LoRA trigger words e.g. 'ohwx woman, film grain'",
                     "tooltip": "Paste your LoRA trigger words here. They will be injected at the very start of every generated prompt automatically — never buried or forgotten."
-                }),
-                "lora_file": (["None"] + folder_paths.get_filename_list("loras"), {
-                    "default": "None",
-                }),
-                "auto_trigger": ("BOOLEAN", {
-                    "default": True,
                 }),
             },
         }
-
-    @classmethod
-    def IS_CHANGED(cls, **kwargs):
-        return float("nan")
 
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("PROMPT", "PREVIEW", "NEG_PROMPT")
@@ -743,11 +505,20 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         print(f"[LTX2] Stop token IDs: {unique}")
         return unique
 
-    def _build_prompt_messages(self, user_input, creativity,
-                                invent_dialogue, frame_count,
-                                scene_context="", lora_triggers=""):
-        """Build the shared prompt messages used by both backends.
-        Returns (messages, token_val, max_tokens_actual, temperature)."""
+    def generate(self, bypass, user_input, creativity, seed, invent_dialogue, keep_model_loaded, offline_mode, frame_count, model, local_path_8b, local_path_3b, scene_context="", lora_triggers=""):
+        # ── Bypass mode — no model loaded, input passed straight through ────────
+        if bypass:
+            print("[LTX2] Bypass ON — skipping model, passing user_input directly.")
+            neg_prompt = _build_negative_prompt("", user_input)
+            return (user_input.strip(), user_input.strip(), neg_prompt)
+
+        # Resolve which local path to use based on selected model
+        path_map = {
+            "8B - NeuralDaredevil (High Quality)": local_path_8b,
+            "3B - Llama-3.2 Abliterated (Low VRAM)": local_path_3b,
+        }
+        local_path = path_map.get(model, "")
+        self.load_model(model_key=model, offline_mode=offline_mode, local_path=local_path)
 
         # --- Timing & pacing ---
         # Convert frames to real seconds, then calculate a hard action count cap.
@@ -776,6 +547,12 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
                 f"HARD STOP after the {ordinal} action is complete. The scene ends there. Do not write a {action_count + 1}th action under any circumstances."
             )
 
+        # --- Seed ---
+        if seed != -1:
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+
         # --- Dynamic token budget ---
         # Calculated from frame count so the two are always in sync.
         # ~120 tokens per action beat gives rich prose without padding.
@@ -783,6 +560,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         # Hard ceiling of 800 — anything above causes model drift.
         token_val = max(256, min(1200, action_count * 120))
         max_tokens_actual = int(token_val * 1.05)
+        min_tokens = int(token_val * 0.75)
         print(f"[LTX2] Dynamic token budget: {token_val} target / {max_tokens_actual} max (actions: {action_count}, frames: {frame_count}, seconds: {real_seconds:.0f})")
 
         # --- Temperature ---
@@ -792,6 +570,11 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             "1.1 - Artistic Expansion":    1.1,
         }
         temperature = temp_map[creativity]
+
+        # --- Build stop token list (the ironclad fix) ---
+        # This encodes every known role delimiter into actual token IDs so the
+        # model hard-stops before it can write "assistant" or any turn boundary.
+        stop_token_ids = self._build_stop_token_ids()
 
         # --- Content tier detection ---
         # Three tiers based on what the user actually asked for.
@@ -1024,81 +807,6 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             {"role": "user",   "content": effective_input + sequence_instruction + no_person_instruction + multi_instruction + dialogue_instruction + explicit_instruction + lora_instruction + length_instruction},
         ]
 
-        return (messages, token_val, max_tokens_actual, temperature)
-
-    def generate(self, backend, bypass, user_input, creativity, seed,
-                 invent_dialogue, keep_model_loaded, offline_mode, frame_count,
-                 model, local_path_8b, local_path_3b,
-                 api_host="127.0.0.1", api_port=1234, api_model="",
-                 api_model_custom="", api_top_k=40, api_top_p=0.9,
-                 api_repeat_penalty=1.07,
-                 scene_context="", lora_triggers="",
-                 lora_file="None", auto_trigger=True):
-        # ── Auto-detect LoRA triggers if no manual triggers provided ──────────
-        if not lora_triggers.strip() and auto_trigger and lora_file and lora_file != "None":
-            lora_path = folder_paths.get_full_path("loras", lora_file)
-            if lora_path:
-                auto_detected = _detect_trigger_words(lora_path)
-                if auto_detected:
-                    lora_triggers = auto_detected
-                    print(f"[LTX2] Auto-detected triggers: {auto_detected}")
-
-        # ── Bypass mode — no model loaded, input passed straight through ────────
-        if bypass:
-            print("[LTX2] Bypass ON — skipping model, passing user_input directly.")
-            neg_prompt = _build_negative_prompt("", user_input)
-            return (user_input.strip(), user_input.strip(), neg_prompt)
-
-        # ── API backend route ─────────────────────────────────────────────────────
-        if backend == "OpenAI-Compatible API":
-            return self._generate_api(
-                user_input=user_input,
-                host=api_host,
-                port=api_port,
-                model=api_model_custom.strip() or api_model,
-                creativity=creativity,
-                seed=seed,
-                top_k=api_top_k,
-                top_p=api_top_p,
-                repeat_penalty=api_repeat_penalty,
-                invent_dialogue=invent_dialogue,
-                frame_count=frame_count,
-                scene_context=scene_context,
-                lora_triggers=lora_triggers,
-                keep_model_loaded=keep_model_loaded,
-            )
-
-        # ── Transformers backend ──────────────────────────────────────────────────
-        path_map = {
-            "8B - NeuralDaredevil (High Quality)": local_path_8b,
-            "3B - Llama-3.2 Abliterated (Low VRAM)": local_path_3b,
-        }
-        local_path = path_map.get(model, "")
-        self.load_model(model_key=model, offline_mode=offline_mode, local_path=local_path)
-
-        # Build shared prompt messages
-        messages, token_val, max_tokens_actual, temperature = self._build_prompt_messages(
-            user_input=user_input,
-            creativity=creativity,
-            invent_dialogue=invent_dialogue,
-            frame_count=frame_count,
-            scene_context=scene_context,
-            lora_triggers=lora_triggers,
-        )
-
-        min_tokens = int(token_val * 0.75)
-
-        # --- Seed ---
-        if seed != -1:
-            torch.manual_seed(seed)
-            if torch.cuda.is_available():
-                torch.cuda.manual_seed_all(seed)
-
-        # --- Build stop token list (the ironclad fix) ---
-        # This encodes every known role delimiter into actual token IDs so the
-        # model hard-stops before it can write "assistant" or any turn boundary.
-        stop_token_ids = self._build_stop_token_ids()
-
         # apply_chat_template returns different types depending on the
         # transformers version and tokenizer implementation:
         #   - Plain tensor          (older transformers, most common)
@@ -1160,64 +868,6 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
 
         if not keep_model_loaded:
             self.unload_model()
-
-        return (result, result, neg_prompt)
-
-    def _generate_api(self, user_input, host, port, model,
-                      creativity, seed,
-                      top_k, top_p, repeat_penalty,
-                      invent_dialogue, frame_count,
-                      scene_context="", lora_triggers="",
-                      keep_model_loaded=False):
-        """Generate a cinematic prompt via an OpenAI-compatible API server."""
-        # Refresh model list cache
-        _fetch_api_models(host, port)
-
-        # Validate model selection
-        effective_model = model.strip()
-        if not effective_model or effective_model.startswith("("):
-            return (
-                "[LTX2-API] No model selected. "
-                "Type a model ID in 'api_model_custom' or ensure your server is running.",
-                "[LTX2-API] No model selected.",
-                "",
-            )
-
-        # Build shared prompt messages (identical to transformers path)
-        messages, token_val, max_tokens_actual, temperature = self._build_prompt_messages(
-            user_input=user_input,
-            creativity=creativity,
-            invent_dialogue=invent_dialogue,
-            frame_count=frame_count,
-            scene_context=scene_context,
-            lora_triggers=lora_triggers,
-        )
-
-        params = {
-            "model":       effective_model,
-            "temperature": temperature,
-            "max_tokens":  max_tokens_actual,
-            "top_k":       top_k,
-            "top_p":       top_p,
-            "repeat_penalty": repeat_penalty,
-        }
-        if seed != -1:
-            params["seed"] = seed
-
-        try:
-            raw_result = _call_api(host=host, port=port, messages=messages, params=params)
-        except RuntimeError as e:
-            error_str = str(e)
-            print(error_str)
-            return (error_str, error_str, "")
-
-        result = self._clean_output(raw_result)
-        neg_prompt = _build_negative_prompt(result, user_input)
-
-        print(f"[LTX2-API] Output: {len(result.split())} words.")
-
-        if not keep_model_loaded:
-            _unload_api_model(host, port, effective_model)
 
         return (result, result, neg_prompt)
 

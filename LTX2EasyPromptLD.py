@@ -673,18 +673,29 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             {"role": "user",   "content": effective_input + sequence_instruction + multi_instruction + dialogue_instruction + explicit_instruction + lora_instruction + length_instruction},
         ]
 
-        # Some tokenizer versions silently ignore return_tensors and return a
-        # plain Python list instead of a tensor — .shape then crashes.
-        # We handle both cases explicitly here.
+        # apply_chat_template returns different types depending on the
+        # transformers version and tokenizer implementation:
+        #   - Plain tensor          (older transformers, most common)
+        #   - BatchEncoding object  (newer transformers 4.43+, has .input_ids)
+        #   - Plain dict            (some tokenizer variants)
+        #   - Plain Python list     (some versions ignore return_tensors entirely)
+        # We normalise all four cases into a plain LongTensor before calling .shape.
         raw = self.tokenizer.apply_chat_template(
             messages,
             return_tensors="pt",
             add_generation_prompt=True,
         )
-        if isinstance(raw, list):
-            # Tokenizer returned a flat list — wrap into a [1, seq_len] tensor
+        if hasattr(raw, "input_ids"):
+            # BatchEncoding object (transformers 4.43+)
+            input_ids = raw.input_ids.to(self.model.device)
+        elif isinstance(raw, dict):
+            # Plain dict with input_ids key
+            input_ids = raw["input_ids"].to(self.model.device)
+        elif isinstance(raw, list):
+            # return_tensors was ignored — wrap flat list into tensor
             input_ids = torch.tensor([raw], dtype=torch.long).to(self.model.device)
         else:
+            # Already a plain tensor — normal case
             input_ids = raw.to(self.model.device)
 
         input_length = input_ids.shape[1]

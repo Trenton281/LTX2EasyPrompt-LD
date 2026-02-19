@@ -392,6 +392,34 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         # Strip leaked timestamp — e.g. "(42221149502953 seconds)" appended by model
         text = re.sub(r"\s*\(\d+\s+seconds?\)\s*$", "", text).strip()
 
+        # Strip leaked token count annotations anywhere — e.g. "(256 tokens)"
+        text = re.sub(r"\s*\(\d+\s+tokens?\)", "", text, flags=re.IGNORECASE).strip()
+
+        # Strip leaked MM:SS - MM:SS timestamp ranges — e.g. "(0:00 - 4:00)"
+        text = re.sub(r"\s*\(\d+:\d+\s*[-–]\s*\d+:\d+\)\s*$", "", text).strip()
+
+        # Strip inline action-time annotations — e.g. "(The action takes up roughly 5 seconds...)"
+        text = re.sub(r"\s*\(The action takes up roughly[^\)]*\)\s*", " ", text, flags=re.IGNORECASE).strip()
+
+        # Strip model self-commentary about actions/timing
+        # e.g. "(The first 5-second action ends here.)" "(Hard stop, exactly 10 seconds)"
+        # "(Last sentence)" "(2 actions, exactly)" etc.
+        text = re.sub(
+            r"\s*\([^)]{0,150}(action ends|scene ends|scene concludes|second action|"
+            r"concludes with|ends here|hard stop|last sentence|actions?,\s*exactly|"
+            r"exactly \d+ seconds?|no token count|no explanation|no excess|no extras|"
+            r"just the scene|no preamble|no revision)[^)]{0,150}\)\s*",
+            " ", text, flags=re.IGNORECASE
+        ).strip()
+
+        # Strip instruction echo spam — model sometimes dumps all its instructions
+        # as a parenthesised checklist at the end: (hard stop)(no excess)(exact dialogue)...
+        # Match any run of 3+ consecutive parenthesised phrases
+        text = re.sub(r"(\s*\([^)]{1,80}\)){3,}", "", text).strip()
+
+        # Strip leaked token/word count lines — e.g. "Token count: 256"
+        text = re.sub(r"\s*\n*(token|word)\s+count\s*:\s*\d+.*$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+
         # 6. Strip screenplay-style bracketed camera directions
         #    e.g. (DOWN 10 degrees), (Pull back 5), (HOLD), (Fade to black), (Zoom in to...)
         text = re.sub(r"\((?:DOWN|UP|PULL|PUSH|ZOOM|HOLD|FADE|PAN|TILT|TRUCK|DOLLY|AMBIENT)[^\)]{0,80}\)", "", text, flags=re.IGNORECASE).strip()
@@ -482,15 +510,18 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             pacing_hint = (
                 f"This clip is {real_seconds:.0f} seconds long. "
                 f"Write EXACTLY 1 action. One single moment. "
-                f"Do not describe anything before or after it. No setup, no resolution."
+                f"Do not describe anything before or after it. No setup, no resolution. "
+                f"HARD STOP after the 1st action. Do not continue."
             )
         else:
+            ordinal = {2: "2nd", 3: "3rd"}.get(action_count, f"{action_count}th")
             pacing_hint = (
                 f"This clip is {real_seconds:.0f} seconds long. "
-                f"Write EXACTLY {action_count} distinct actions — no more. "
-                f"Each action should take roughly {real_seconds / action_count:.0f} seconds of screen time. "
+                f"Write EXACTLY {action_count} distinct actions — NO MORE THAN {action_count}. "
+                f"Each action takes roughly {real_seconds / action_count:.0f} seconds of screen time. "
                 f"Do not add setup, backstory, or resolution beyond these {action_count} actions. "
-                f"Stop when the {action_count}{'nd' if action_count == 2 else 'rd' if action_count == 3 else 'th'} action is complete."
+                f"Dialogue counts as an action if it interrupts the physical scene — budget it inside one of your {action_count} beats, not as an extra beat. "
+                f"HARD STOP after the {ordinal} action is complete. The scene ends there. Do not write a {action_count + 1}th action under any circumstances."
             )
 
         # --- Seed ---
@@ -505,9 +536,9 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         # Hard floor of 256 so very short clips still get a usable prompt.
         # Hard ceiling of 800 — anything above causes model drift.
         token_val = max(256, min(800, action_count * 120))
-        max_tokens_actual = int(token_val * 1.3)   # headroom to finish last sentence
-        min_tokens = int(token_val * 0.50)         # let model stop naturally if done
-        print(f"[LTX2] Dynamic token budget: {token_val} (actions: {action_count}, frames: {frame_count})")
+        max_tokens_actual = int(token_val * 1.10)  # tight ceiling — 10% headroom to finish last sentence cleanly
+        min_tokens = int(token_val * 0.75)         # high floor forces model to fill budget but not exceed it
+        print(f"[LTX2] Dynamic token budget: {token_val} target / {max_tokens_actual} max (actions: {action_count}, frames: {frame_count}, seconds: {real_seconds:.0f})")
 
         # --- Temperature ---
         temp_map = {
@@ -629,11 +660,12 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         # If the input contains no reference to a person, inject an instruction
         # telling the model to write a pure scene — no invented characters.
         _person_re = re.compile(
-            r"\b(he|she|his|her|him|they|them|their|man|woman|girl|boy|guy|"
+            r"\b(he|she|his|her|him|they|them|their|man|men|woman|women|girl|girls|boy|boys|guy|guys|"
             r"person|people|couple|figure|character|model|actress|actor|"
             r"someone|anybody|nobody|stranger|friend|lover|wife|husband|"
-            r"boyfriend|girlfriend|teenager|adult|female|male|blonde|brunette|"
-            r"redhead|nude|naked)\b",
+            r"boyfriend|girlfriend|teenager|teenagers|adult|adults|female|male|blonde|brunette|"
+            r"redhead|nude|naked|singer|dancer|performer|athlete|soldier|worker|"
+            r"player|nurse|doctor|student|teacher|child|children|kid|kids|crowd|audience)\b",
             re.IGNORECASE,
         )
         has_person = bool(_person_re.search(user_input + " " + scene_context))
@@ -714,7 +746,10 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         length_instruction = (
             f"\n[PACING — THIS IS MANDATORY: {pacing_hint} "
             f"Write approximately {token_val} tokens total. "
-            f"Do not exceed the action count above under any circumstances.]"
+            f"Do not exceed the action count above under any circumstances. "
+            f"Do NOT echo, repeat, or summarise any instructions in your output — not in brackets, not in parentheses, not at the end. "
+            f"Do NOT write token counts, word counts, action counts, or any parenthetical notes. "
+            f"The scene ends with the last sentence of prose. Nothing after it.]"
         )
 
         # --- Merge vision context if provided ---

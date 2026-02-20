@@ -26,7 +26,10 @@ _INSTANCE = {"processor": None, "model": None, "source": None}
 DESCRIBE_PROMPT = (
     "Describe this image in one paragraph of plain sentences, around 100-130 words. "
     "Start with 'Style: photorealistic' or 'Style: anime' or 'Style: 3D animation' etc. "
-    "Then describe the person naturally — their age, gender, skin tone, hair, body type, "
+    "Then describe the person — your FIRST sentence about the person MUST explicitly state their ethnicity and skin tone using plain terms "
+    "such as 'a Black man', 'a white woman', 'a South Asian man', 'an East Asian woman', 'a Latino man', 'a Middle Eastern woman' etc. "
+    "Do not skip, soften, or omit this — it is mandatory. "
+    "Then continue with their age, hair colour and style, body type, "
     "what they are wearing or doing, and any exposed body parts you can see — "
     "use plain words: breasts, nipples, pussy, penis, anus, buttocks. "
     "Describe their pose, what they are on or interacting with, "

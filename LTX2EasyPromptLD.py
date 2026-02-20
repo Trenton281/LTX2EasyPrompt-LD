@@ -362,6 +362,14 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         # catches multi-line notes and the bracket spam that follows them.
         text = re.sub(r"\s*\(Note:.*$", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
 
+        # Strip instruction labels that leaked into output
+        text = re.sub(
+            r"^(Action Beat \d+:|Undressing Segment:|Flash/Reveal Segment:|Titty Drop[^:]*:|Note:|Scene Instruction:|Pacing:|Dialogue Instruction:).*",
+            "",
+            text,
+            flags=re.IGNORECASE | re.MULTILINE,
+        ).strip()
+
         # Strip orphaned closing bracket spam: ) ) ) ) ) ...
         text = re.sub(r"[\s)]{3,}$", "", text).strip()
 
@@ -748,6 +756,10 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
                 "Do NOT self-escalate beyond what the user described. "
                 "Keep the tone sensual and cinematic — not pornographic. "
                 "Always state the character's age as a specific number. "
+                "HARD STOP RULES — CANNOT BE OVERRIDDEN: "
+                "Flash or top lift = reveal breasts ONLY. Do NOT pull down jeans, trousers or underwear. Do NOT describe buttocks or genitals. "
+                "Lap dance = dancing and grinding ONLY. Do NOT strip clothing. Do NOT expose nipples or genitals. "
+                "Stop the moment the requested action is complete. Add nothing further. "
                 + undress_clause + "]"
             )
         else:

@@ -586,8 +586,9 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         # Tier 3 triggers: direct anatomical / act terms
         _explicit_re = re.compile(
             r"\b(pussy|cock|dick|penis|vagina|clit|clitoris|anus|asshole|"
-            r"tits|cum|orgasm|fuck|fucking|blowjob|handjob|penetrat\w*|"
-            r"thrust\w*)\b",
+            r"tits|cum|jizz|squirt\w*|creampie|orgasm|fuck|fucking|"
+            r"blowjob|handjob|bj|hj|breed\w*|bareback|raw\s+dog|"
+            r"balls|ballsack|taint|penetrat\w*|thrust\w*)\b",
             re.IGNORECASE,
         )
 
@@ -598,7 +599,11 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             r"(shirt|dress|top|bra|pants|jeans|clothes|clothing|outfit|underwear|skirt|jacket|coat|robe)|"
             r"disrobe\w*|unbutton\w*|unzip\w*|peels?\s+off|pulls?\s+off|"
             r"shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress)|"
-            r"sensual|erotic|intimate|lingerie|bare\s+skin|bare\s+body)\b",
+            r"sensual|erotic|intimate|lingerie|bare\s+skin|bare\s+body|"
+            r"braless|pantyless|commando|see.through|sheer|"
+            r"bath\w*|shower\w*|changing|bikini|thong|g.string|"
+            r"getting\s+(dressed|undressed|naked)|"
+            r"body\s+paint\w*)\b",
             re.IGNORECASE,
         )
 
@@ -611,25 +616,85 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             r"removes?\s+(her|his|their|the)?\s*\w*\s*"
             r"(shirt|dress|top|bra|pants|jeans|clothes|clothing|outfit|underwear|skirt|jacket|coat|robe)|"
             r"disrobe\w*|unbutton\w*|unzip\w*|peels?\s+off|pulls?\s+off|"
-            r"shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress))\b",
+            r"shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress)|"
+            r"slips?\s+out\s+of|shrugs?\s+off|steps?\s+out\s+of|"
+            r"tears?\s+off|rips?\s+off|tugs?\s+down|pulls?\s+down|pushes?\s+down|"
+            r"lifts?\s+(her|his)\s+(shirt|top|dress)|raises?\s+(her|his)\s+(dress|skirt)|"
+            r"unhooks?|unclasps?|slides?\s+off|slips?\s+off|wriggles?\s+out\s+of|"
+            r"buttons?\s+open|pops?\s+the\s+buttons?|rolls?\s+down|"
+            r"still\s+dressed|fully\s+clothed|in\s+(her|his)\s+clothes|"
+            r"gets?\s+undressed|gets?\s+naked|becomes?\s+naked)\b",
             re.IGNORECASE,
         )
         has_undressing = bool(_undress_re.search(user_input))
 
+        # Already-naked detection — "a naked woman" / "a nude man" means the
+        # subject starts the scene undressed. Only applies if no clothing words
+        # are present — "a naked woman who puts on a dress" is NOT already naked.
+        _already_naked_re = re.compile(
+            r"\b(naked|nude|topless|bare|undressed|"
+            r"in\s+nothing\s+but|wearing\s+only|only\s+wearing|"
+            r"just\s+out\s+of\s+the\s+shower|fresh\s+out\s+of\s+the\s+shower|"
+            r"wrapped\s+in\s+a\s+towel|just\s+woke\s+up|waking\s+up)\b",
+            re.IGNORECASE,
+        )
+        _clothing_re = re.compile(
+            r"\b(wearing|dressed\s+in|clothed|shirt|dress|top|bra|pants|jeans|"
+            r"skirt|blouse|jacket|coat|robe|lingerie|underwear|outfit|clothes|"
+            r"gets?\s+naked|becomes?\s+naked|strip\w*|undress\w*|takes?\s+off)\b",
+            re.IGNORECASE,
+        )
+        is_already_naked = (
+            bool(_already_naked_re.search(user_input)) and
+            not bool(_clothing_re.search(user_input))
+        )
+
+        # Mid-action detection — if the scene is already in progress (touching,
+        # rubbing, riding, sucking etc.) the subject is implicitly already undressed.
+        # Skip the undressing segment entirely — it would be nonsensical here.
+        _mid_action_re = re.compile(
+            r"\b(rubbing|touching|fingering|riding|sucking|licking|stroking|"
+            r"grinding|bouncing|moaning|climax\w*|orgasm\w*|masturbat\w*|"
+            r"already\s+naked|already\s+nude|already\s+undressed|"
+            r"in\s+bed|on\s+the\s+bed|on\s+her\s+knees|on\s+his\s+knees|"
+            r"spread\s+(her|his)\s+legs?|legs?\s+spread|her\s+legs\s+open|"
+            r"sitting\s+on\s+(him|her|his|a)|"
+            r"from\s+behind|doggy\s*style|doggy|"
+            r"legs?\s+wrapped\s+around|wrapped\s+(her|his)\s+legs?|"
+            r"on\s+top\s+of\s+(him|her)|between\s+(her|his)\s+legs?|"
+            r"mid.sex|mid.act|mid.scene|after\s+sex|post.sex|"
+            r"lying\s+(there|naked|nude)|bare\s+(back|chest|skin|legs?|arms?)|"
+            r"exposed\s+(skin|body|chest|back)|"
+            r"sunbath\w*|posing\s+(nude|naked)|"
+            r"inside\s+(her|him)|penetrat\w*)\b",
+            re.IGNORECASE,
+        )
+        is_mid_action = bool(_mid_action_re.search(user_input)) or is_already_naked
+
+        # If mid-action or already naked, never fire the undressing segment
+        if is_mid_action:
+            has_undressing = False
+
         if is_explicit:
             # ── Tier 3: user asked for explicit content ──────────────────────
-            explicit_instruction = (
-                "\n[INSTRUCTION: This is an explicit adult scene. "
-                "You MUST use direct anatomical terms — pussy, cock, anus, clit, ass — exactly as written. "
-                "These are REQUIRED words, not optional. Do not replace them with 'sex', 'crevice', 'core', "
-                "'womanhood', 'manhood', or any other euphemism or metaphor. "
-                "If the user said 'pussy', write 'pussy' every time. "
+            undress_clause_t3 = (
                 "UNDRESSING SEGMENT — MANDATORY: If the subject starts clothed, you MUST write a dedicated undressing segment "
                 "before ANY explicit act or nudity. This is not a brief mention — it is a full narrative beat. "
                 "Go garment by garment: name it, describe how it is removed (fingers, zipper, pulling over the head, stepping out of), "
                 "describe what body part is revealed and how it looks. Then the next garment. Then the next. "
                 "The camera must linger on each reveal. Do not compress. Do not summarise. Do not skip to naked. "
                 "The undressing IS the scene — write it with the same density and length as the explicit act that follows. "
+            ) if not is_mid_action else (
+                "The subject is already undressed or mid-act — do NOT write an undressing segment. "
+                "Begin directly with the action as described. "
+            )
+            explicit_instruction = (
+                "\n[INSTRUCTION: This is an explicit adult scene. "
+                "You MUST use direct anatomical terms — pussy, cock, anus, clit, ass — exactly as written. "
+                "These are REQUIRED words, not optional. Do not replace them with 'sex', 'crevice', 'core', "
+                "'womanhood', 'manhood', or any other euphemism or metaphor. "
+                "If the user said 'pussy', write 'pussy' every time. "
+                + undress_clause_t3 +
                 "Always state the character's age as a specific number. "
                 "Describe body parts, positions, and physical actions with blunt, specific language. "
                 "Every anatomical detail must be stated plainly — no softening, no implying, no cutting away.]"
@@ -682,13 +747,17 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         # --- Person detection ---
         # If the input contains no reference to a person, inject an instruction
         # telling the model to write a pure scene — no invented characters.
+        # NOTE: 'nobody' and 'model' intentionally excluded —
+        #   'nobody' means no person; 'model' false-positives on 'LTX model' etc.
         _person_re = re.compile(
             r"\b(he|she|his|her|him|they|them|their|man|men|woman|women|girl|girls|boy|boys|guy|guys|"
-            r"person|people|couple|figure|character|model|actress|actor|"
-            r"someone|anybody|nobody|stranger|friend|lover|wife|husband|"
-            r"boyfriend|girlfriend|teenager|teenagers|adult|adults|female|male|blonde|brunette|"
-            r"redhead|nude|naked|singer|dancer|performer|athlete|soldier|worker|"
-            r"player|nurse|doctor|student|teacher|child|children|kid|kids|crowd|audience)\b",
+            r"person|people|couple|figure|character|actress|actor|"
+            r"someone|anybody|stranger|friend|lover|wife|husband|partner|spouse|"
+            r"boyfriend|girlfriend|teenager|teenagers|adult|adults|female|male|"
+            r"blonde|brunette|redhead|nude|naked|"
+            r"singer|dancer|performer|athlete|soldier|worker|"
+            r"player|nurse|doctor|student|teacher|child|children|kid|kids|"
+            r"crowd|audience|escort|mistress|dominatrix|sub|submissive)\b",
             re.IGNORECASE,
         )
         has_person = bool(_person_re.search(user_input + " " + scene_context))

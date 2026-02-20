@@ -599,11 +599,15 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             r"(shirt|dress|top|bra|pants|jeans|clothes|clothing|outfit|underwear|skirt|jacket|coat|robe)|"
             r"disrobe\w*|unbutton\w*|unzip\w*|peels?\s+off|pulls?\s+off|"
             r"shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress)|"
+            r"titty\s+drop|titties\s+out|flash\w*\s+(her|his)?\s*(tits|titties|boobs|breasts)|"
+            r"lift\w*\s+(her|his)?\s*(top|shirt)|show\w*\s+(her|his)?\s*(tits|titties|boobs)|"
             r"sensual|erotic|intimate|lingerie|bare\s+skin|bare\s+body|"
             r"braless|pantyless|commando|see.through|sheer|"
             r"bath\w*|shower\w*|changing|bikini|thong|g.string|"
             r"getting\s+(dressed|undressed|naked)|"
-            r"body\s+paint\w*)\b",
+            r"body\s+paint\w*|titty|titties|titty\s+drop|boobs|"
+            r"flash\w*\s+(her|his)?\s*(tits|titties|boobs|breasts)|"
+            r"lift\w*\s+(her|his)?\s*(top|shirt)|show\w*\s+(her|his)?\s*(tits|titties|boobs))\b",
             re.IGNORECASE,
         )
 
@@ -617,6 +621,8 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             r"(shirt|dress|top|bra|pants|jeans|clothes|clothing|outfit|underwear|skirt|jacket|coat|robe)|"
             r"disrobe\w*|unbutton\w*|unzip\w*|peels?\s+off|pulls?\s+off|"
             r"shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress)|"
+            r"titty\s+drop|titties\s+out|flash\w*\s+(her|his)?\s*(tits|titties|boobs|breasts)|"
+            r"lift\w*\s+(her|his)?\s*(top|shirt)|show\w*\s+(her|his)?\s*(tits|titties|boobs)|"
             r"slips?\s+out\s+of|shrugs?\s+off|steps?\s+out\s+of|"
             r"tears?\s+off|rips?\s+off|tugs?\s+down|pulls?\s+down|pushes?\s+down|"
             r"lifts?\s+(her|his)\s+(shirt|top|dress)|raises?\s+(her|his)\s+(dress|skirt)|"
@@ -701,13 +707,39 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             )
         elif is_sensual:
             # ── Tier 2: nudity/undressing implied — sensual but not pornographic ─
-            undress_clause = (
-                "UNDRESSING SEGMENT — MANDATORY: The prompt involves clothing removal or nudity. "
-                "Write a dedicated undressing segment as its own narrative beat — garment by garment, "
-                "describing how each is removed and what is physically revealed at each step. "
-                "The camera lingers on each reveal. Do not skip or compress. "
-                "Describing bare skin, curves, and the naked body is appropriate and expected. "
-            ) if has_undressing else ""
+
+            # Detect flash/titty-drop specifically
+            import re as _re2
+            _flash_re = _re2.compile(
+                r"\b(titty\s+drop|titties\s+out|"
+                r"flash\w*\s+(her|his)?\s*(tits|titties|boobs|breasts)|"
+                r"lift\w*\s+(her|his)?\s*(top|shirt)|"
+                r"show\w*\s+(her|his)?\s*(tits|titties|boobs))\b",
+                _re2.IGNORECASE
+            )
+            is_flash = bool(_flash_re.search(user_input))
+
+            if is_flash:
+                undress_clause = (
+                    "TITTY DROP / FLASH SEGMENT — THIS IS THE ENTIRE SCENE. DO NOT ADD ANYTHING ELSE. "
+                    "Write ONLY these movements in this exact order: "
+                    "1. Her hands reach for the hem of her top or the cups of her bra — describe her grip, her fingers on the fabric. "
+                    "2. She lifts her top upward slowly, or pulls her bra cups downward — describe the fabric moving, the resistance, the motion. "
+                    "3. Her bare breasts are released and fall free under gravity — describe the weight, the natural drop, the shape, the skin, the nipples. The camera holds on this. "
+                    "4. She holds the pose. Camera stays on her bare chest. "
+                    "STRICT LIMITS: Do NOT add sexual acts. Do NOT describe genitals. Do NOT escalate beyond the breast reveal. "
+                    "This is a slow, deliberate, sensual moment — not pornographic. Just the lift, the drop, the reveal. Nothing more. "
+                )
+            elif has_undressing:
+                undress_clause = (
+                    "UNDRESSING SEGMENT — MANDATORY: The prompt involves clothing removal or nudity. "
+                    "Write a dedicated undressing segment as its own narrative beat — garment by garment, "
+                    "describing how each is removed and what is physically revealed at each step. "
+                    "The camera lingers on each reveal. Do not skip or compress. "
+                    "Describing bare skin, curves, and the naked body is appropriate and expected. "
+                )
+            else:
+                undress_clause = ""
             explicit_instruction = (
                 "\n[INSTRUCTION: This scene involves nudity or sensual content. "
                 "Describing the bare body naturally is appropriate — skin, curves, flesh, nakedness. "
@@ -757,7 +789,8 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             r"blonde|brunette|redhead|nude|naked|"
             r"singer|dancer|performer|athlete|soldier|worker|"
             r"player|nurse|doctor|student|teacher|child|children|kid|kids|"
-            r"crowd|audience|escort|mistress|dominatrix|sub|submissive)\b",
+            r"crowd|audience|escort|mistress|dominatrix|sub|submissive|"
+            r"friends|friend|group|gang|party|crew|team|pair|duo)\b",
             re.IGNORECASE,
         )
         has_person = bool(_person_re.search(user_input + " " + scene_context))
@@ -931,6 +964,8 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
 
         # Regex clean as a last-resort safety net (should rarely trigger now)
         result = self._clean_output(result)
+        # Strip any lone trailing bracket left by model
+        result = re.sub(r'\s*[\(\[]\s*$', '', result).strip()
 
         # --- Build negative prompt ---
         neg_prompt = _build_negative_prompt(result, user_input)

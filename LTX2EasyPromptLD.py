@@ -106,7 +106,8 @@ class LTX2PromptArchitect:
                 "model": ([
                     "8B - NeuralDaredevil (High Quality)",
                     "3B - Llama-3.2 Abliterated (Low VRAM)",
-                ], {"default": "8B - NeuralDaredevil (High Quality)", "tooltip": "Choose your LLM. 8B gives better quality prompts and handles explicit content well. 3B is faster and uses less VRAM. Both download automatically on first run."}),
+                    "14B - Qwen3 Abliterated (High VRAM)",
+                ], {"default": "8B - NeuralDaredevil (High Quality)", "tooltip": "Choose your LLM. 8B is the best all-rounder. 3B is fastest and uses least VRAM. 14B Qwen3 gives the highest quality output but needs ~18GB VRAM — all download automatically on first run."}),
                 # ── Local paths for offline mode ────────────────────────────
                 # Point each field at the model's snapshot folder on disk.
                 # Leave blank to use the HF cache (requires a prior download).
@@ -121,6 +122,12 @@ class LTX2PromptArchitect:
                     "multiline": False,
                     "placeholder": "Local path to Llama-3.2 3B snapshot folder",
                     "tooltip": "Optional. Paste the full path to your locally downloaded Llama 3.2 3B snapshot folder. Leave blank to use the HuggingFace cache automatically."
+                }),
+                "local_path_14b": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "placeholder": "Local path to Qwen3 14B snapshot folder",
+                    "tooltip": "Optional. Paste the full path to your locally downloaded Qwen3 14B snapshot folder. Leave blank to use the HuggingFace cache automatically."
                 }),
             },
             "optional": {
@@ -147,8 +154,9 @@ class LTX2PromptArchitect:
     # ── Model registry ───────────────────────────────────────────────────────
     # Maps dropdown label → HuggingFace model ID for auto-download
     MODELS = {
-        "8B - NeuralDaredevil (High Quality)": "mlabonne/NeuralDaredevil-8B-abliterated",
-        "3B - Llama-3.2 Abliterated (Low VRAM)": "huihui-ai/Llama-3.2-3B-Instruct-abliterated",
+        "8B - NeuralDaredevil (High Quality)":         "mlabonne/NeuralDaredevil-8B-abliterated",
+        "3B - Llama-3.2 Abliterated (Low VRAM)":       "huihui-ai/Llama-3.2-3B-Instruct-abliterated",
+        "14B - Qwen3 Abliterated (High VRAM)":         "huihui-ai/Huihui-Qwen3-14B-abliterated-v2",
     }
 
     # ── Hardcoded system prompt ───────────────────────────────────────────────
@@ -319,6 +327,10 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
           4. Compliance checklist   ("(Exactly 4 actions...)(Pacing strict)..." etc.)
         """
         text = text.strip()
+
+        # Strip Qwen3 thinking blocks — <think>...</think> — safety net in case
+        # enable_thinking=False didn't fully suppress them
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
         # 1. Strip leading preamble
         text = LTX2PromptArchitect._PREAMBLE_RE.sub("", text)
@@ -513,7 +525,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         print(f"[LTX2] Stop token IDs: {unique}")
         return unique
 
-    def generate(self, bypass, user_input, creativity, seed, invent_dialogue, keep_model_loaded, offline_mode, frame_count, model, local_path_8b, local_path_3b, scene_context="", lora_triggers=""):
+    def generate(self, bypass, user_input, creativity, seed, invent_dialogue, keep_model_loaded, offline_mode, frame_count, model, local_path_8b, local_path_3b, local_path_14b, scene_context="", lora_triggers=""):
         # ── Bypass mode — no model loaded, input passed straight through ────────
         if bypass:
             print("[LTX2] Bypass ON — skipping model, passing user_input directly.")
@@ -522,9 +534,13 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
 
         # Resolve which local path to use based on selected model
         path_map = {
-            "8B - NeuralDaredevil (High Quality)": local_path_8b,
+            "8B - NeuralDaredevil (High Quality)":   local_path_8b,
             "3B - Llama-3.2 Abliterated (Low VRAM)": local_path_3b,
+            "14B - Qwen3 Abliterated (High VRAM)":   local_path_14b,
         }
+        # Qwen3 has a built-in thinking mode that outputs <think>...</think> blocks
+        # before the actual response. We disable it here so it doesn't bleed into output.
+        is_qwen3 = "Qwen3" in model
         local_path = path_map.get(model, "")
         self.load_model(model_key=model, offline_mode=offline_mode, local_path=local_path)
 
@@ -915,10 +931,32 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         else:
             lora_instruction = ""
 
+        # --- Static camera detection ---
+        # If the user explicitly asks for a static/locked-off/fixed shot,
+        # inject a hard instruction to prevent the LLM inventing camera movement.
+        _static_re = re.compile(
+            r"\b(static|locked.off|locked off|fixed|stationary|no camera movement|"
+            r"camera still|still camera|camera locked|tripod shot|tripod|"
+            r"fixed camera|fixed shot|static shot|static camera)\b",
+            re.IGNORECASE,
+        )
+        if _static_re.search(user_input):
+            camera_instruction = (
+                "\n[CAMERA INSTRUCTION — MANDATORY: This is a static, locked-off shot. "
+                "The camera does NOT move at all — no push, no pull, no pan, no tilt, no drift, no zoom. "
+                "The lens is completely fixed for the entire clip. "
+                "All motion in the scene comes from the subject only. "
+                "Do not describe any camera movement whatsoever. "
+                "Do not write phrases like 'the camera tilts', 'the shot pulls back', 'the lens drifts'. "
+                "The frame is still. Only what is inside it moves.]"
+            )
+        else:
+            camera_instruction = ""
+
         # --- Build messages ---
         messages = [
             {"role": "system", "content": self.SYSTEM_PROMPT},
-            {"role": "user",   "content": effective_input + sequence_instruction + no_person_instruction + multi_instruction + dialogue_instruction + explicit_instruction + lora_instruction + length_instruction},
+            {"role": "user",   "content": effective_input + sequence_instruction + no_person_instruction + multi_instruction + dialogue_instruction + explicit_instruction + lora_instruction + camera_instruction + length_instruction},
         ]
 
         # apply_chat_template returns different types depending on the
@@ -932,6 +970,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             messages,
             return_tensors="pt",
             add_generation_prompt=True,
+            enable_thinking=False if is_qwen3 else None,
         )
         if hasattr(raw, "input_ids"):
             # BatchEncoding object (transformers 4.43+)

